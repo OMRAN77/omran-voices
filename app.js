@@ -21,7 +21,8 @@ const BUILTIN = {
 const CHUNK = 260;          // engine limit is 300 characters per piece
 const GAP_SEC = 0.25;       // silence between pieces
 const TARGET_RATE = 24000;  // engine works at 24 kHz
-const MAX_REF_SEC = 30;
+const MAX_REF_SEC = 30;     // longest uploaded file kept
+const REC_SEC = 20;         // the microphone stops by itself after 20 seconds
 const HISTORY_MAX = 30;
 const DEFAULTS = { ex: 0.5, temp: 0.8, cfg: 0.5 };
 
@@ -134,7 +135,7 @@ async function joinWavs(buffers) {
     let p = parseWav(buf);
     if (!p || (rate && p.rate !== rate)) p = { rate: rate || TARGET_RATE, pcm: floatToInt16(await decodeToMono(buf, rate || TARGET_RATE)) };
     rate = rate || p.rate;
-    parts.push(p.pcm);
+    parts.push(trimSilence(p.pcm, rate, 32768));
   }
   const gap = Math.round(rate * GAP_SEC);
   const total = parts.reduce((n, p) => n + p.length, 0) + gap * Math.max(0, parts.length - 1);
@@ -147,7 +148,14 @@ const blobToBase64 = (blob) => new Promise((res, rej) => { const r = new FileRea
 
 /* ---------- API ---------- */
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), 'X-Access-Key': state.key } });
+  let r;
+  try {
+    // Encoded because fetch() throws on header values outside Latin-1 (an Arabic password).
+    r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), 'X-Access-Key': encodeURIComponent(state.key) } });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    throw new Error('ما في اتصال بالموقع. تأكد من النت وجرّب مرة ثانية.');
+  }
   if (!r.ok) {
     let j = {};
     try { j = await r.json(); } catch {}
@@ -170,7 +178,8 @@ async function tryUnlock(key) {
     await renderHistory();
     if (!state.hfToken) setMsg('genMsg', 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
   } catch (e) {
-    localStorage.removeItem('ov_key');
+    // Forget the saved password only when it is wrong, not when the network blinks.
+    if (e.status === 401) localStorage.removeItem('ov_key');
     $('app').classList.add('hidden');
     $('lock').classList.remove('hidden');
     if (key) $('lockMsg').textContent = e.message || 'ما قدرت أدخل.';
@@ -236,9 +245,24 @@ function updateCount() {
 }
 
 /* ---------- generation ---------- */
-async function generate() {
+// What the current result was made from: pressing «شغّل» again on the same
+// inputs replays it instead of spending another run of the free engine quota.
+const inputSig = () => JSON.stringify([$('text').value.trim(), $('lang').value, $('voice').value, $('ex').value, $('temp').value, $('cfg').value]);
+const isCurrent = () => Boolean(state.current && state.current.sig === inputSig());
+
+async function playOrGenerate() {
+  if (isCurrent()) { $('player').currentTime = 0; $('player').play().catch(() => {}); return; }
+  await generate(true);
+}
+async function downloadCurrent() {
+  if (!isCurrent()) await generate(false);
+  if (isCurrent()) download(state.current.blob, 'omran-voices-' + state.current.id + '.wav');
+}
+
+async function generate(autoplay = true) {
   const text = $('text').value.trim();
   if (!text) { setMsg('genMsg', 'اكتب الكلام أول.', 'bad'); return; }
+  const sig = inputSig();
   const chunks = splitText(text);
   const lang = $('lang').value;
   const vsel = $('voice').value;
@@ -248,7 +272,7 @@ async function generate() {
 
   const ctrl = new AbortController();
   state.stop = ctrl;
-  $('go').disabled = true; $('stop').classList.remove('hidden');
+  $('go').disabled = true; $('download').disabled = true; $('again').disabled = true; $('stop').classList.remove('hidden');
   $('bar').style.display = 'block'; $('bar').firstElementChild.style.width = '3%';
   $('result').classList.add('hidden');
   const buffers = [];
@@ -258,12 +282,12 @@ async function generate() {
       buffers.push(await generatePiece(chunks[i], lang, vsel, mine, settings, ctrl.signal));
       $('bar').firstElementChild.style.width = Math.round(((i + 1) / chunks.length) * 100) + '%';
     }
-    const blob = buffers.length === 1 ? new Blob([buffers[0]], { type: 'audio/wav' }) : await joinWavs(buffers);
+    const blob = await joinWavs(buffers);
     const id = stamp() + '-' + Math.random().toString(36).slice(2, 6);
-    state.current = { blob, id };
+    state.current = { blob, id, sig };
     $('player').src = URL.createObjectURL(blob);
     $('result').classList.remove('hidden');
-    $('player').play().catch(() => {});
+    if (autoplay) $('player').play().catch(() => {});
     try {
       await db.put('history', { id, text, lang, voiceName, blob, created: Date.now() });
       const all = (await db.all('history')).sort((a, b) => b.created - a.created);
@@ -278,7 +302,8 @@ async function generate() {
     else setMsg('genMsg', e.message || 'صار خطأ.', 'bad');
     if (e.status === 401) tryUnlock('');
   } finally {
-    $('go').disabled = false; $('stop').classList.add('hidden'); $('bar').style.display = 'none'; state.stop = null;
+    $('go').disabled = false; $('download').disabled = false; $('again').disabled = false;
+    $('stop').classList.add('hidden'); $('bar').style.display = 'none'; state.stop = null;
   }
 }
 
@@ -322,17 +347,34 @@ async function toggleRecord() {
   recorder.start();
   const t0 = Date.now();
   $('recBtn').innerHTML = '<span class="rec"></span>وقّف التسجيل';
-  setMsg('recMsg', 'يسجّل... 0 ثانية');
+  setMsg('recMsg', `يسجّل... باقي ${REC_SEC} ثانية`);
   recTimer = setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
-    setMsg('recMsg', `يسجّل... ${s} ثانية` + (s < 10 ? ' (كمّل لين ١٠ ثواني على الأقل)' : ''));
-    if (s >= MAX_REF_SEC) recorder.stop();
+    setMsg('recMsg', `يسجّل... باقي ${Math.max(0, REC_SEC - s)} ثانية` + (s < 10 ? ' (كمّل لين ١٠ ثواني على الأقل)' : ''));
+    if (s >= REC_SEC && recorder.state === 'recording') recorder.stop();
   }, 250);
+}
+// Cuts silence at both ends. Used on recordings (the engine takes the voice mostly
+// from the first 6–10 seconds, so the moment after pressing «سجّل» would waste them)
+// and on every generated piece (the engine leaves 2–3 s of silence after the speech).
+// scale: 1 for float samples, 32768 for Int16.
+function trimSilence(f, rate, scale = 1) {
+  const win = Math.round(rate * 0.02);
+  let peak = 0;
+  for (let i = 0; i < f.length; i++) peak = Math.max(peak, Math.abs(f[i]));
+  const thr = Math.max(0.01 * scale, peak * 0.05);
+  const loud = (i) => { let s = 0, n = 0; for (let j = i; j < Math.min(f.length, i + win); j++, n++) s += f[j] * f[j]; return n > 0 && Math.sqrt(s / n) > thr; };
+  let a = 0;
+  while (a < f.length && !loud(a)) a += win;
+  let b = f.length;
+  while (b > a && !loud(Math.max(a, b - win))) b -= win;
+  const pad = Math.round(rate * 0.15);
+  return f.subarray(Math.max(0, a - pad), Math.min(f.length, b + pad));
 }
 async function useReference(blob) {
   try {
     setMsg('recMsg', 'جاري تجهيز الصوت...');
-    const f = await decodeToMono(await blob.arrayBuffer(), TARGET_RATE);
+    const f = trimSilence(await decodeToMono(await blob.arrayBuffer(), TARGET_RATE), TARGET_RATE);
     const trimmed = f.subarray(0, TARGET_RATE * MAX_REF_SEC);
     const secs = trimmed.length / TARGET_RATE;
     if (secs < 5) { setMsg('recMsg', `الصوت قصير (${secs.toFixed(1)} ثانية). لازم ٥ ثواني على الأقل، والأحسن ١٠ إلى ٢٠.`, 'bad'); return; }
@@ -380,9 +422,10 @@ function init() {
     if (v.startsWith('b:')) play(SAMPLES + BUILTIN[v.slice(2)][0]);
     else { const m = state.voices.find((x) => x.id === v.slice(2)); if (m) play(URL.createObjectURL(m.blob)); }
   };
-  $('go').onclick = generate;
+  $('go').onclick = playOrGenerate;
+  $('again').onclick = () => generate(true);
   $('stop').onclick = () => state.stop && state.stop.abort();
-  $('download').onclick = () => state.current && download(state.current.blob, 'omran-voices-' + state.current.id + '.wav');
+  $('download').onclick = downloadCurrent;
   $('recBtn').onclick = toggleRecord;
   $('fileBtn').onclick = () => $('file').click();
   $('file').onchange = () => { const f = $('file').files[0]; if (f) useReference(f); $('file').value = ''; };

@@ -64,9 +64,12 @@ async function uploadVoice(wavBuffer) {
 function friendly(errText) {
   const t = String(errText || '');
   if (/quota|runs limit|exceeded/i.test(t)) {
+    // Hugging Face says when the daily quota comes back ("Try again in 5:12:09").
+    const wait = t.match(/try again in (\d+):(\d\d):\d\d/i);
+    const back = wait && (+wait[1] || +wait[2]) ? ' يرجع بعد ' + (+wait[1] ? wait[1] + ' ساعة و' : '') + (+wait[2]) + ' دقيقة.' : ' يرجع بعد كم ساعة.';
     return new EngineError(
       process.env.HF_TOKEN
-        ? 'خلص الحد المجاني لحسابك في Hugging Face. يرجع بعد كم ساعة.'
+        ? 'خلص الحد المجاني اليومي لحسابك في Hugging Face.' + back
         : 'خلص الحد المجاني بدون حساب. حط HF_TOKEN في Vercel عشان يزيد الحد.',
       429, 'quota');
   }

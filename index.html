@@ -36,6 +36,8 @@
   button:hover { border-color: var(--gold); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .primary { background: linear-gradient(180deg, var(--gold2), var(--gold)); color: #1a1408; border: none; font-weight: 700; font-size: 17px; width: 100%; padding: 14px; }
+  .primary.ghost { background: var(--card2); color: var(--gold2); border: 1px solid var(--gold); }
+  .actions { display:flex; gap:10px; } .actions > button { flex: 1; min-width: 0; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 6px; }
   .msg { margin-top: 10px; font-size: 14px; line-height: 1.6; }
   .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
@@ -102,14 +104,16 @@
         <button id="resetSettings" style="margin-top:12px">رجّع الإعدادات الأصلية</button>
       </details>
       <div style="height:14px"></div>
-      <button id="go" class="primary">حوّل لصوت</button>
+      <div class="actions">
+        <button id="go" class="primary">▶ شغّل</button>
+        <button id="download" class="primary ghost">⬇ نزّل</button>
+      </div>
       <button id="stop" class="hidden" style="width:100%;margin-top:8px">وقّف</button>
       <div class="bar" id="bar"><i></i></div>
       <div id="genMsg" class="msg"></div>
       <div id="result" class="hidden">
         <audio id="player" controls preload="auto"></audio>
-        <div style="height:8px"></div>
-        <button id="download" style="width:100%">نزّل الصوت</button>
+        <button id="again" style="width:100%;margin-top:8px">🔄 سوّه مرة ثانية بنفس الكلام</button>
       </div>
     </section>
 
