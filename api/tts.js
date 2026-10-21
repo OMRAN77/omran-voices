@@ -27,6 +27,9 @@ module.exports = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).send(out.audio);
   } catch (e) {
+    // For the owner's Vercel logs. Header values are masked: fetch errors can quote
+    // them (the token or the password).
+    console.error('tts failed:', e.name, e.code || '', String(e.message || '').replace(/Bearer\s+\S+|hf_\w+/g, '***').slice(0, 300));
     const status = e instanceof engine.EngineError ? e.status : 500;
     const code = e instanceof engine.EngineError ? e.code : 'server';
     return res.status(status).json({ error: e instanceof engine.EngineError ? e.message : 'صار خطأ في الخادم.', code });

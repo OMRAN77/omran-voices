@@ -31,8 +31,10 @@ class EngineError extends Error {
 
 // A token pasted into a terminal can arrive broken (one stray character), and a
 // bad value makes every request fail. Only a real-looking token is used.
+// Invisible direction marks (an Arabic keyboard adds them) are removed first,
+// so a real token wrapped in them still counts.
 function hfToken() {
-  const t = String(process.env.HF_TOKEN || '').trim();
+  const t = String(process.env.HF_TOKEN || '').replace(/[\s\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
   return /^hf_[A-Za-z0-9]{20,}$/.test(t) ? t : '';
 }
 
@@ -75,6 +77,10 @@ function friendly(errText) {
     // Hugging Face says when the daily quota comes back ("Try again in 5:12:09").
     const wait = t.match(/try again in (\d+):(\d\d):\d\d/i);
     const back = wait && (+wait[1] || +wait[2]) ? ' يرجع بعد ' + (+wait[1] ? wait[1] + ' ساعة و' : '') + (+wait[2]) + ' دقيقة.' : ' يرجع بعد كم ساعة.';
+    // "Authenticate with a Hugging Face token" although we sent one = the token was not accepted.
+    if (hfToken() && /authenticate with a hugging face token/i.test(t)) {
+      return new EngineError('Hugging Face ما قبل مفتاح HF_TOKEN اللي في Vercel (منتهي أو منسوخ غلط). سوّ مفتاح جديد نوعه Read وحطّه من جديد.', 429, 'quota');
+    }
     return new EngineError(
       hfToken()
         ? 'خلص الحد المجاني اليومي لحسابك في Hugging Face.' + back
