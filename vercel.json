@@ -1,0 +1,36 @@
+{
+  "functions": {
+    "api/tts.js": {
+      "maxDuration": 180
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self)"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/icon-192.png",
+      "destination": "/api/icon?s=192"
+    },
+    {
+      "source": "/icon-512.png",
+      "destination": "/api/icon?s=512"
+    }
+  ]
+}
