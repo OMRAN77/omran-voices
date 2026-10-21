@@ -29,9 +29,17 @@ class EngineError extends Error {
   }
 }
 
+// A token pasted into a terminal can arrive broken (one stray character), and a
+// bad value makes every request fail. Only a real-looking token is used.
+function hfToken() {
+  const t = String(process.env.HF_TOKEN || '').trim();
+  return /^hf_[A-Za-z0-9]{20,}$/.test(t) ? t : '';
+}
+
 function headers(extra = {}) {
   const h = { ...extra };
-  if (process.env.HF_TOKEN) h.Authorization = 'Bearer ' + process.env.HF_TOKEN;
+  const t = hfToken();
+  if (t) h.Authorization = 'Bearer ' + t;
   return h;
 }
 
@@ -68,7 +76,7 @@ function friendly(errText) {
     const wait = t.match(/try again in (\d+):(\d\d):\d\d/i);
     const back = wait && (+wait[1] || +wait[2]) ? ' يرجع بعد ' + (+wait[1] ? wait[1] + ' ساعة و' : '') + (+wait[2]) + ' دقيقة.' : ' يرجع بعد كم ساعة.';
     return new EngineError(
-      process.env.HF_TOKEN
+      hfToken()
         ? 'خلص الحد المجاني اليومي لحسابك في Hugging Face.' + back
         : 'خلص الحد المجاني بدون حساب. حط HF_TOKEN في Vercel عشان يزيد الحد.',
       429, 'quota');
@@ -167,4 +175,4 @@ async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0
   return { audio: Buffer.from(await a.arrayBuffer()), refPath: uploaded };
 }
 
-module.exports = { generate, EngineError, LANGS, BUILTIN, SAMPLES, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };
+module.exports = { generate, hfToken, EngineError, LANGS, BUILTIN, SAMPLES, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };

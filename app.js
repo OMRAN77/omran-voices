@@ -176,7 +176,7 @@ async function tryUnlock(key) {
     $('app').classList.remove('hidden');
     await refreshVoices();
     await renderHistory();
-    if (!state.hfToken) setMsg('genMsg', 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
+    if (!state.hfToken) setMsg('genMsg', j.hfTokenSet ? 'ملاحظة: مفتاح Hugging Face (HF_TOKEN) في Vercel غلط، فالمحرك يشتغل بدون حساب والحد صغير وايد.' : 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
   } catch (e) {
     // Forget the saved password only when it is wrong, not when the network blinks.
     if (e.status === 401) localStorage.removeItem('ov_key');
