@@ -4,6 +4,8 @@
 //
 // The dataset holds voices.json plus one WAV per voice (made by tools/prepare-donors.py):
 //   [{ "id": "v1", "name": "<first name>", "gender": "m" | "f", "file": "v1.wav", "consent": true }]
+// or voices.json alone, each voice carrying its WAV inside as base64 ("data" instead of
+// "file", tools/prepare-donors.py --one-file): one file for the owner to upload.
 // A voice without "consent": true is never listed or used.
 //
 // VOICES_DIR (a local folder with the same layout) replaces the dataset for local tests.
@@ -48,8 +50,9 @@ function clean(entry) {
   const name = String(entry && entry.name || '').trim();
   const gender = entry && entry.gender === 'f' ? 'f' : entry && entry.gender === 'm' ? 'm' : '';
   const file = String(entry && entry.file || '');
-  if (!/^[\w-]{1,40}$/.test(id) || !name || !gender || !/^[\w.-]+\.wav$/.test(file) || entry.consent !== true) return null;
-  return { id, name: name.split(/\s+/)[0], gender, file };
+  const data = typeof (entry && entry.data) === 'string' && entry.data.length > 1000 ? entry.data : '';
+  if (!/^[\w-]{1,40}$/.test(id) || !name || !gender || !(data || /^[\w.-]+\.wav$/.test(file)) || entry.consent !== true) return null;
+  return { id, name: name.split(/\s+/)[0], gender, file, data };
 }
 
 // Full catalog (server side only: includes file names).
@@ -75,7 +78,7 @@ async function wav(id) {
   if (wavCache.has(id)) return wavCache.get(id);
   const v = (await catalog()).find((x) => x.id === id);
   if (!v) throw new VoicesError('الصوت مو موجود.', 404, 'unknown_voice');
-  const buf = await readFile(v.file);
+  const buf = v.data ? Buffer.from(v.data, 'base64') : await readFile(v.file);
   wavCache.set(id, buf);
   return buf;
 }

@@ -134,3 +134,19 @@ test('الصفحة: القائمة «أصوات المتبرعين» بالاس�
   assert.match(src, /optgroup label="أصوات المتبرعين"/);
   assert.match(src, /\$\('lang'\)\.onchange = \(\) => localStorage\.setItem\('ov_lang', \$\('lang'\)\.value\);/);
 });
+
+test('ملف واحد: voices.json فيه الأصوات نفسها (base64)، والقائمة ما تطلّع البيانات', () =>
+  withEnv({ VOICES_DIR: (() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-one-'));
+    fs.writeFileSync(path.join(dir, 'voices.json'), JSON.stringify([
+      { id: 'v1', name: 'سعود الشهرياني', gender: 'm', consent: true, data: WAV.toString('base64') },
+      { id: 'v2', name: 'بدون صوت', gender: 'f', consent: true, data: 'abc' },
+    ]));
+    return dir;
+  })() }, async () => {
+    const voices = fresh('api/_voices.js');
+    const list = await voices.list();
+    assert.deepStrictEqual(list, [{ id: 'v1', name: 'سعود', gender: 'm' }]);
+    assert.ok(!JSON.stringify(list).includes(WAV.toString('base64').slice(0, 40)));
+    assert.ok((await voices.wav('v1')).equals(WAV));
+  }));

@@ -7,7 +7,8 @@ For every row of donors.csv that says the person agreed (consent = yes):
   3. pick the cleanest 15 seconds of speech, cut the silence at both ends,
      set the level (speech RMS -20 dBFS, peak at most -1 dBFS);
   4. write v<N>.wav (24 kHz mono 16-bit) and voices.json into --out.
-Upload the whole --out folder to the PRIVATE Hugging Face dataset (see README).
+Upload the whole --out folder to the PRIVATE Hugging Face dataset (see README),
+or with --one-file only voices.json (the WAVs are inside it).
 Names never go to GitHub: they live only in voices.json inside the private dataset.
 
 donors.csv (UTF-8, one row per file):
@@ -18,6 +19,7 @@ Needs: ffmpeg, faster-whisper (VAD), resemblyzer, soundfile, numpy.
 Console output is English (the owner's terminal does not show Arabic).
 """
 import argparse
+import base64
 import csv
 import json
 import os
@@ -150,6 +152,7 @@ def main():
     ap.add_argument("--seconds", type=float, default=15.0)
     ap.add_argument("--min-seconds", type=float, default=10.0)
     ap.add_argument("--min-snr", type=float, default=20.0)
+    ap.add_argument("--one-file", action="store_true", help="put every WAV inside voices.json (base64): one file to upload")
     ap.add_argument("--same-voice", type=float, default=0.80, help="if the file's two most different voice groups are less alike than this, it has another person")
     a = ap.parse_args()
 
@@ -217,6 +220,11 @@ def main():
         report.append(rec)
         print(f"OK        row {i}  {file} -> {out_file}  {secs}s  snr {snr:.1f} dB  same voice {alike:.2f}", flush=True)
 
+    if a.one_file:
+        for v in voices:
+            with open(os.path.join(a.out, v["file"]), "rb") as fh:
+                v["data"] = base64.b64encode(fh.read()).decode("ascii")
+            del v["file"]
     with open(os.path.join(a.out, "voices.json"), "w", encoding="utf-8") as f:
         json.dump(voices, f, ensure_ascii=False, indent=1)
     with open(os.path.join(a.out, "report.json"), "w", encoding="utf-8") as f:
