@@ -3,6 +3,16 @@
 // in the X-Ref-Path header so the page can reuse it for the next pieces.
 const checkAccess = require('./_auth');
 const engine = require('./_engine');
+const dialect = require('./_dialect');
+
+// The pronunciation dictionary (api/_dialect.js) rewrites Emirati words for the
+// engine only; the page keeps the user's own text. Diacritics add characters, so
+// a piece that would pass the engine's limit is sent as written instead.
+function spokenText(text, lang) {
+  const original = String(text || '');
+  const spoken = dialect.apply(original, lang);
+  return spoken.trim().length <= engine.MAX_CHARS ? spoken : original;
+}
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST فقط.' });
@@ -18,8 +28,9 @@ module.exports = async (req, res) => {
     } else if (v.refPath) voice = { refPath: String(v.refPath) };
     else voice = { builtin: v.builtin ? String(v.builtin) : undefined };
 
+    const lang = String(b.lang || 'ar');
     const out = await engine.generate({
-      text: b.text, lang: String(b.lang || 'ar'), voice,
+      text: spokenText(b.text, lang), lang, voice,
       exaggeration: b.exaggeration, temperature: b.temperature, cfg: b.cfg, seed: b.seed,
     });
     if (out.refPath) res.setHeader('X-Ref-Path', out.refPath);
@@ -35,3 +46,4 @@ module.exports = async (req, res) => {
     return res.status(status).json({ error: e instanceof engine.EngineError ? e.message : 'صار خطأ في الخادم.', code });
   }
 };
+module.exports.spokenText = spokenText;
