@@ -7,18 +7,8 @@
 
 const SPACE = 'https://resembleai-chatterbox-multilingual-tts.hf.space';
 const API = SPACE + '/gradio_api';
-const SAMPLES = 'https://storage.googleapis.com/chatterbox-demo-samples/mtl_prompts/';
-
-// Built-in voice of each language (the demo's own reference samples).
-const BUILTIN = {
-  ar: 'ar_f/ar_prompts2.flac', da: 'da_m1.flac', de: 'de_f1.flac', el: 'el_m.flac',
-  en: 'en_f1.flac', es: 'es_f1.flac', fi: 'fi_m.flac', fr: 'fr_f1.flac',
-  he: 'he_m1.flac', hi: 'hi_f1.flac', it: 'it_m1.flac', ja: 'ja/ja_prompts1.flac',
-  ko: 'ko_f.flac', ms: 'ms_f.flac', nl: 'nl_m.flac', no: 'no_f1.flac',
-  pl: 'pl_m.flac', pt: 'pt_m1.flac', ru: 'ru_m.flac', sv: 'sv_f.flac',
-  sw: 'sw_m.flac', tr: 'tr_m.flac', zh: 'zh_f2.flac',
-};
-const LANGS = Object.keys(BUILTIN);
+// Every language the engine speaks. Any voice speaks all of them.
+const LANGS = ['ar', 'da', 'de', 'el', 'en', 'es', 'fi', 'fr', 'he', 'hi', 'it', 'ja', 'ko', 'ms', 'nl', 'no', 'pl', 'pt', 'ru', 'sv', 'sw', 'tr', 'zh'];
 const MAX_CHARS = 300;
 
 class EngineError extends Error {
@@ -133,7 +123,8 @@ async function waitForResult(sessionHash, timeoutMs) {
 
 /**
  * Generates speech for one piece of text (max 300 characters).
- * voice: { builtin: 'ar' } or { refPath: '/tmp/gradio/...' } or { wav: Buffer }
+ * voice: { wav: Buffer } (a donor's or the user's own voice) or { refPath: '/tmp/gradio/...' }
+ * (that WAV already uploaded). There is no built-in voice.
  * Returns { audio: Buffer, refPath?: string }.
  */
 async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0.8, cfg = 0.5, seed = 0, timeoutMs = 150000 }) {
@@ -152,9 +143,7 @@ async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0
     }
     refPath = voice.refPath;
   } else {
-    const b = (voice && voice.builtin) || lang;
-    if (!BUILTIN[b]) throw new EngineError('الصوت مو موجود.', 400, 'input');
-    refPath = SAMPLES + BUILTIN[b];
+    throw new EngineError('اختار صوت من القائمة.', 400, 'no_voice');
   }
 
   const clamp = (v, lo, hi, d) => (Number.isFinite(+v) ? Math.min(hi, Math.max(lo, +v)) : d);
@@ -181,4 +170,4 @@ async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0
   return { audio: Buffer.from(await a.arrayBuffer()), refPath: uploaded };
 }
 
-module.exports = { generate, hfToken, EngineError, LANGS, BUILTIN, SAMPLES, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };
+module.exports = { generate, hfToken, EngineError, LANGS, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };

@@ -1,9 +1,12 @@
-// POST /api/tts  { text, lang, voice: {builtin}|{refPath}|{wavBase64}, exaggeration, temperature, cfg, seed }
-// Returns audio/wav. When a new voice was uploaded, its engine path comes back
-// in the X-Ref-Path header so the page can reuse it for the next pieces.
+// POST /api/tts  { text, lang, voice: {donor}|{refPath}|{wavBase64}, exaggeration, temperature, cfg, seed }
+// Returns audio/wav. When the user's own voice was uploaded, its engine path comes
+// back in the X-Ref-Path header so the page can reuse it for the next pieces.
+// A donor voice is read from the private store (api/_voices.js) here on the server;
+// the page only ever sends its id.
 const checkAccess = require('./_auth');
 const engine = require('./_engine');
 const dialect = require('./_dialect');
+const voices = require('./_voices');
 
 // The pronunciation dictionary (api/_dialect.js) rewrites Emirati words for the
 // engine only; the page keeps the user's own text. Diacritics add characters, so
@@ -14,25 +17,44 @@ function spokenText(text, lang) {
   return spoken.trim().length <= engine.MAX_CHARS ? spoken : original;
 }
 
+// Engine path of each donor voice already uploaded by this server instance, so the
+// next pieces do not upload the same WAV again.
+const donorRef = new Map();
+
+async function generateWithDonor(id, args) {
+  const known = donorRef.get(id);
+  if (known) {
+    try { return await engine.generate({ ...args, voice: { refPath: known } }); }
+    catch (e) {
+      if (!(e instanceof engine.EngineError) || e.code !== 'ref_gone') throw e;
+      donorRef.delete(id); // the engine cleaned its temp files: upload again below
+    }
+  }
+  const out = await engine.generate({ ...args, voice: { wav: await voices.wav(id) } });
+  if (out.refPath) donorRef.set(id, out.refPath);
+  return { audio: out.audio };
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST فقط.' });
   if (!checkAccess(req, res)) return;
   try {
     const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const v = b.voice || {};
-    let voice;
-    if (v.wavBase64) {
+    const lang = String(b.lang || 'ar');
+    const args = {
+      text: spokenText(b.text, lang), lang,
+      exaggeration: b.exaggeration, temperature: b.temperature, cfg: b.cfg, seed: b.seed,
+    };
+    let out;
+    if (v.donor) out = await generateWithDonor(String(v.donor), args);
+    else if (v.wavBase64) {
       const wav = Buffer.from(String(v.wavBase64), 'base64');
       if (wav.length < 1000 || wav.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'ملف الصوت حجمه غلط.' });
-      voice = { wav };
-    } else if (v.refPath) voice = { refPath: String(v.refPath) };
-    else voice = { builtin: v.builtin ? String(v.builtin) : undefined };
+      out = await engine.generate({ ...args, voice: { wav } });
+    } else if (v.refPath) out = await engine.generate({ ...args, voice: { refPath: String(v.refPath) } });
+    else out = await engine.generate({ ...args, voice: null });
 
-    const lang = String(b.lang || 'ar');
-    const out = await engine.generate({
-      text: spokenText(b.text, lang), lang, voice,
-      exaggeration: b.exaggeration, temperature: b.temperature, cfg: b.cfg, seed: b.seed,
-    });
     if (out.refPath) res.setHeader('X-Ref-Path', out.refPath);
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Cache-Control', 'no-store');
@@ -41,9 +63,8 @@ module.exports = async (req, res) => {
     // For the owner's Vercel logs. Header values are masked: fetch errors can quote
     // them (the token or the password).
     console.error('tts failed:', e.name, e.code || '', String(e.message || '').replace(/Bearer\s+\S+|hf_\w+/g, '***').slice(0, 300));
-    const status = e instanceof engine.EngineError ? e.status : 500;
-    const code = e instanceof engine.EngineError ? e.code : 'server';
-    return res.status(status).json({ error: e instanceof engine.EngineError ? e.message : 'صار خطأ في الخادم.', code });
+    const known = e instanceof engine.EngineError || e instanceof voices.VoicesError;
+    return res.status(known ? e.status : 500).json({ error: known ? e.message : 'صار خطأ في الخادم.', code: known ? e.code : 'server' });
   }
 };
 module.exports.spokenText = spokenText;
