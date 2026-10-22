@@ -29,7 +29,7 @@ test('مفتاح عربي ما يطيّح الطلب: يروح بدون Authoriz
     const sent = [];
     global.fetch = async (url, opts = {}) => { new Headers(opts.headers); sent.push(opts.headers || {}); return new Response('down', { status: 503 }); };
     try {
-      await assert.rejects(e.generate({ text: 'test', lang: 'en', voice: { builtin: 'en' } }), (err) => {
+      await assert.rejects(e.generate({ text: 'test', lang: 'en', voice: { refPath: '/tmp/gradio/abc/voice.wav' } }), (err) => {
         assert.ok(err instanceof e.EngineError, err.name + ': ' + err.message);
         return true;
       });
@@ -48,7 +48,7 @@ test('Hugging Face يطلب مفتاح ونحن أرسلنا واحد = رسال
       return new Response(sse);
     };
     try {
-      await assert.rejects(e.generate({ text: 'test', lang: 'en', voice: { builtin: 'en' } }), (err) => {
+      await assert.rejects(e.generate({ text: 'test', lang: 'en', voice: { refPath: '/tmp/gradio/abc/voice.wav' } }), (err) => {
         assert.strictEqual(err.code, 'quota');
         assert.match(err.message, /ما قبل مفتاح/);
         return true;

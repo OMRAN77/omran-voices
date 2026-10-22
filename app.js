@@ -9,15 +9,7 @@ const LANGS = [
   ['el', 'اليونانية'], ['he', 'العبرية'], ['sw', 'السواحلية'],
 ];
 const LANG_NAME = Object.fromEntries(LANGS);
-const SAMPLES = 'https://storage.googleapis.com/chatterbox-demo-samples/mtl_prompts/';
-const BUILTIN = {
-  ar: ['ar_f/ar_prompts2.flac', 'f'], da: ['da_m1.flac', 'm'], de: ['de_f1.flac', 'f'], el: ['el_m.flac', 'm'],
-  en: ['en_f1.flac', 'f'], es: ['es_f1.flac', 'f'], fi: ['fi_m.flac', 'm'], fr: ['fr_f1.flac', 'f'],
-  he: ['he_m1.flac', 'm'], hi: ['hi_f1.flac', 'f'], it: ['it_m1.flac', 'm'], ja: ['ja/ja_prompts1.flac', ''],
-  ko: ['ko_f.flac', 'f'], ms: ['ms_f.flac', 'f'], nl: ['nl_m.flac', 'm'], no: ['no_f1.flac', 'f'],
-  pl: ['pl_m.flac', 'm'], pt: ['pt_m1.flac', 'm'], ru: ['ru_m.flac', 'm'], sv: ['sv_f.flac', 'f'],
-  sw: ['sw_m.flac', 'm'], tr: ['tr_m.flac', 'm'], zh: ['zh_f2.flac', 'f'],
-};
+const GENDER = { m: 'ريال', f: 'حرمة' };
 const CHUNK = 260;          // engine limit is 300 characters per piece
 const GAP_SEC = 0.25;       // silence between pieces
 const TARGET_RATE = 24000;  // engine works at 24 kHz
@@ -27,7 +19,8 @@ const HISTORY_MAX = 30;
 const DEFAULTS = { ex: 0.5, temp: 0.8, cfg: 0.5 };
 
 const $ = (id) => document.getElementById(id);
-const state = { key: localStorage.getItem('ov_key') || '', voices: [], refPaths: {}, current: null, recBlob: null, stop: null, hfToken: true };
+// donors: the donated voices (from the private store, via /api/voices); voices: the user's own.
+const state = { key: localStorage.getItem('ov_key') || '', donors: [], donorSamples: {}, voices: [], refPaths: {}, current: null, recBlob: null, stop: null, hfToken: true };
 
 /* ---------- storage (IndexedDB) ---------- */
 const db = (() => {
@@ -174,9 +167,11 @@ async function tryUnlock(key) {
     localStorage.setItem('ov_key', key);
     $('lock').classList.add('hidden');
     $('app').classList.remove('hidden');
+    await loadDonors();
     await refreshVoices();
     await renderHistory();
-    if (!state.hfToken) setMsg('genMsg', j.hfTokenSet ? 'ملاحظة: مفتاح Hugging Face (HF_TOKEN) في Vercel غلط، فالمحرك يشتغل بدون حساب والحد صغير وايد.' : 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
+    if (state.donorErr) setMsg('genMsg', 'ما قدرت أجيب أصوات المتبرعين: ' + state.donorErr, 'bad');
+    else if (!state.hfToken) setMsg('genMsg', j.hfTokenSet ? 'ملاحظة: مفتاح Hugging Face (HF_TOKEN) في Vercel غلط، فالمحرك يشتغل بدون حساب والحد صغير وايد.' : 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
   } catch (e) {
     // Forget the saved password only when it is wrong, not when the network blinks.
     if (e.status === 401) localStorage.removeItem('ov_key');
@@ -193,7 +188,12 @@ const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'
 function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 let previewAudio = null;
 function play(src) { if (previewAudio) previewAudio.pause(); previewAudio = new Audio(src); previewAudio.play().catch(() => {}); }
-function voiceLabel(code) { const g = BUILTIN[code][1]; return LANG_NAME[code] + (g === 'f' ? ' - امرأة' : g === 'm' ? ' - رجّال' : ''); }
+const donorLabel = (d) => d.name + ' — ' + (GENDER[d.gender] || '');
+async function loadDonors() {
+  state.donorErr = '';
+  try { state.donors = (await (await api('/api/voices')).json()).voices || []; }
+  catch (e) { state.donors = []; state.donorErr = e.message || 'خطأ'; if (e.status === 401) throw e; }
+}
 
 function fillLangs() {
   $('lang').innerHTML = LANGS.map(([c, n]) => `<option value="${c}">${n}</option>`).join('');
@@ -203,9 +203,12 @@ async function refreshVoices() {
   state.voices = (await db.all('voices')).sort((a, b) => b.created - a.created);
   const sel = $('voice'), keep = sel.value || localStorage.getItem('ov_voice');
   const mine = state.voices.map((v) => `<option value="m:${v.id}">${escapeHtml(v.name)}</option>`).join('');
-  const built = LANGS.map(([c]) => `<option value="b:${c}">${voiceLabel(c)}</option>`).join('');
-  sel.innerHTML = (mine ? `<optgroup label="أصواتي">${mine}</optgroup>` : '') + `<optgroup label="أصوات المحرك">${built}</optgroup>`;
-  sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : 'b:' + $('lang').value;
+  const donors = state.donors.map((d) => `<option value="d:${escapeHtml(d.id)}">${escapeHtml(donorLabel(d))}</option>`).join('');
+  sel.innerHTML = (donors ? `<optgroup label="أصوات المتبرعين">${donors}</optgroup>` : '')
+    + (mine ? `<optgroup label="أصواتي">${mine}</optgroup>` : '')
+    || '<option value="" disabled>ما فيه أصوات للحين — سجّل صوتك تحت</option>';
+  const values = [...sel.options].filter((o) => !o.disabled).map((o) => o.value);
+  sel.value = keep && values.includes(keep) ? keep : values[0] || '';
   renderMyVoices();
 }
 function renderMyVoices() {
@@ -267,7 +270,9 @@ async function generate(autoplay = true) {
   const lang = $('lang').value;
   const vsel = $('voice').value;
   const mine = vsel.startsWith('m:') ? state.voices.find((v) => v.id === vsel.slice(2)) : null;
-  const voiceName = mine ? mine.name : voiceLabel(vsel.slice(2) || lang);
+  const donor = vsel.startsWith('d:') ? state.donors.find((d) => d.id === vsel.slice(2)) : null;
+  if (!mine && !donor) { setMsg('genMsg', 'اختار صوت من القائمة أول.', 'bad'); return; }
+  const voiceName = mine ? mine.name : donorLabel(donor);
   const settings = { exaggeration: +$('ex').value, temperature: +$('temp').value, cfg: +$('cfg').value };
 
   const ctrl = new AbortController();
@@ -312,7 +317,7 @@ async function generatePiece(text, lang, vsel, mine, settings, signal) {
   if (mine) {
     if (state.refPaths[mine.id]) body.voice.refPath = state.refPaths[mine.id];
     else body.voice.wavBase64 = await blobToBase64(mine.blob);
-  } else body.voice.builtin = vsel.slice(2) || lang;
+  } else body.voice.donor = vsel.slice(2);
 
   for (let attempt = 0; ; attempt++) {
     try {
@@ -412,15 +417,18 @@ function init() {
   $('text').value = localStorage.getItem('ov_text') || '';
   $('text').oninput = () => { localStorage.setItem('ov_text', $('text').value); updateCount(); };
   updateCount();
-  $('lang').onchange = () => {
-    localStorage.setItem('ov_lang', $('lang').value);
-    if ($('voice').value.startsWith('b:')) { $('voice').value = 'b:' + $('lang').value; localStorage.setItem('ov_voice', $('voice').value); }
-  };
+  // Every voice speaks every language, so changing the language keeps the voice.
+  $('lang').onchange = () => localStorage.setItem('ov_lang', $('lang').value);
   $('voice').onchange = () => localStorage.setItem('ov_voice', $('voice').value);
-  $('preview').onclick = () => {
+  $('preview').onclick = async () => {
     const v = $('voice').value;
-    if (v.startsWith('b:')) play(SAMPLES + BUILTIN[v.slice(2)][0]);
-    else { const m = state.voices.find((x) => x.id === v.slice(2)); if (m) play(URL.createObjectURL(m.blob)); }
+    if (v.startsWith('d:')) {
+      const id = v.slice(2);
+      try {
+        if (!state.donorSamples[id]) state.donorSamples[id] = URL.createObjectURL(await (await api('/api/voices?sample=' + encodeURIComponent(id))).blob());
+        play(state.donorSamples[id]);
+      } catch (e) { setMsg('genMsg', e.message || 'ما قدرت أشغّل العيّنة.', 'bad'); }
+    } else { const m = state.voices.find((x) => x.id === v.slice(2)); if (m) play(URL.createObjectURL(m.blob)); }
   };
   $('go').onclick = playOrGenerate;
   $('again').onclick = () => generate(true);
