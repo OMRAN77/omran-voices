@@ -150,3 +150,18 @@ test('ملف واحد: voices.json فيه الأصوات نفسها (base64)، �
     assert.ok(!JSON.stringify(list).includes(WAV.toString('base64').slice(0, 40)));
     assert.ok((await voices.wav('v1')).equals(WAV));
   }));
+
+test('«مو موجود» من Hugging Face: يفرّق بين ملف ناقص (ويذكر الموجود) ومفتاح ما يشوف المستودع', () =>
+  withEnv({ VOICES_DIR: undefined, VOICES_DATASET: undefined, HF_TOKEN: 'hf_' + 'Ab1'.repeat(12) }, async () => {
+    const realFetch = global.fetch;
+    try {
+      fresh('api/_engine.js');
+      global.fetch = async (url) => String(url).includes('/api/datasets/')
+        ? Response.json({ siblings: [{ rfilename: '.gitattributes' }, { rfilename: 'voices (1).json' }] })
+        : new Response('Entry not found', { status: 404 });
+      await assert.rejects(fresh('api/_voices.js').list(), (e) => e.code === 'missing' && e.message.includes('voices (1).json'));
+
+      global.fetch = async () => new Response('Repository not found', { status: 404 });
+      await assert.rejects(fresh('api/_voices.js').list(), (e) => e.code === 'denied' && /HF_TOKEN/.test(e.message));
+    } finally { global.fetch = realFetch; fresh('api/_engine.js'); }
+  }));

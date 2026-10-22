@@ -40,7 +40,16 @@ async function readFile(name) {
   const url = `https://huggingface.co/datasets/${dataset()}/resolve/main/${name}`;
   const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
   if (r.status === 401 || r.status === 403) throw new VoicesError('HF_TOKEN ما يقدر يفتح مستودع الأصوات الخاص (' + r.status + ').', 502, 'denied');
-  if (r.status === 404) throw new VoicesError('ما لقيت ' + name + ' في مستودع الأصوات ' + dataset() + '.', 404, 'missing');
+  if (r.status === 404) {
+    // Hugging Face answers 404 both when the file is not there and when this token
+    // cannot see the private dataset; the dataset's own page tells them apart.
+    const info = await fetch(`https://huggingface.co/api/datasets/${dataset()}`, { headers: { Authorization: 'Bearer ' + token } }).catch(() => null);
+    if (info && info.ok) {
+      const files = ((await info.json()).siblings || []).map((s) => s.rfilename).filter((f) => f !== '.gitattributes');
+      throw new VoicesError('ما لقيت ' + name + ' في المستودع ' + dataset() + '. الملفات اللي فيه: ' + (files.join('، ') || 'ولا ملف') + '.', 404, 'missing');
+    }
+    throw new VoicesError('مفتاح HF_TOKEN اللي في Vercel ما يشوف المستودع الخاص ' + dataset() + ': يمكن من حساب ثاني غير omran77، أو ما عنده صلاحية قراءة.', 502, 'denied');
+  }
   if (!r.ok) throw new VoicesError('مستودع الأصوات ما رد (' + r.status + ').', 502, 'down');
   return Buffer.from(await r.arrayBuffer());
 }
