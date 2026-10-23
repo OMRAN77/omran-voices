@@ -14,6 +14,7 @@ import gulf4 from './sentences/gulf-4.mjs';
 import gulf5 from './sentences/gulf-5.mjs';
 import gulf6 from './sentences/gulf-6.mjs';
 import gulf7 from './sentences/gulf-7.mjs';
+import gulf8 from './sentences/gulf-8.mjs';
 import ar from './sentences/ar.mjs';
 import msa from './sentences/msa.mjs';
 
@@ -21,15 +22,20 @@ const require = createRequire(import.meta.url);
 const { PATTERN } = require('../record-lib.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The Gulf files each define some topics; gulf-4 adds more sentences (and frames) to topics already defined.
+// A part can be [module, weight]: its frames then get that many turns per round, so the words the owner asked for
+// (gulf-5, gulf-6, gulf-8) show up more often than the generic frames.
 function merge(...parts) {
   const out = {};
-  for (const p of parts) for (const [t, d] of Object.entries(p)) {
-    out[t] = out[t] || { hand: [], frames: [] };
-    out[t].hand.push(...(d.hand || [])); out[t].frames.push(...(d.frames || []));
+  for (const part of parts) {
+    const [p, weight] = Array.isArray(part) ? part : [part, 1];
+    for (const [t, d] of Object.entries(p)) {
+      out[t] = out[t] || { hand: [], frames: [] };
+      out[t].hand.push(...(d.hand || [])); out[t].frames.push(...(d.frames || []).map((f) => ({ ...f, weight })));
+    }
   }
   return out;
 }
-const REG = { gulf: merge(gulf1, gulf2, gulf3, gulf4, gulf5, gulf6, gulf7), ar, msa };
+const REG = { gulf: merge(gulf1, gulf2, gulf3, [gulf4, 3], [gulf5, 2], [gulf6, 2], gulf7, [gulf8, 5]), ar, msa };
 // Share of each Gulf topic that must carry at least one Gulf marker word (hand-written ones always go in).
 const GULF_SHARE = 0.88;
 const REGLABEL = { gulf: 'خليجي', ar: 'عربي', msa: 'فصحى' };
@@ -60,8 +66,9 @@ for (const reg of ['gulf', 'ar', 'msa']) {
       if (seen.has(n)) { dropped.push([reg, t, 'dup: ' + s]); continue; }
       seen.add(n); hand.push(s);
     }
-    const lists = (def.frames || []).map((f) => expand(f, rnd).map(clean).filter((s) => { if (!valid(s)) { dropped.push([reg, t, s]); return false; } return true; }));
-    const m = lists.map((l) => l.filter(hasGulf)), n = lists.map((l) => l.filter((x) => !hasGulf(x)));
+    const lists = (def.frames || []).map((f) => { const l = expand(f, rnd).map(clean).filter((s) => { if (!valid(s)) { dropped.push([reg, t, s]); return false; } return true; }); l.weight = f.weight || 1; return l; });
+    const keep = (l, f) => { const r = l.filter(f); r.weight = l.weight; return r; };
+    const m = lists.map((l) => keep(l, hasGulf)), n = lists.map((l) => keep(l, (x) => !hasGulf(x)));
     return { t, quota: q[t], hand, lists, out: [], hi: 0, ptr: lists.map(() => 0), m, n, mp: m.map(() => 0), np: n.map(() => 0) };
   });
   // One sentence from each frame in turn (the turn is remembered in `rr`, so frames share the cell evenly).
@@ -70,12 +77,14 @@ for (const reg of ['gulf', 'ar', 'msa']) {
     while (c.out.length < limit && idle < lists.length) {
       const i = c[rr] = ((c[rr] || 0) + 1) % lists.length;
       let got = false;
-      while (ptr[i] < lists[i].length) {
-        const s = lists[i][ptr[i]++];
-        const n = norm(s);
-        if (seen.has(n)) continue;
-        seen.add(n); c.out.push({ text: s, src: 't' }); got = true;
-        break;
+      for (let k = 0; k < (lists[i].weight || 1) && c.out.length < limit; k++) {
+        while (ptr[i] < lists[i].length) {
+          const s = lists[i][ptr[i]++];
+          const n = norm(s);
+          if (seen.has(n)) continue;
+          seen.add(n); c.out.push({ text: s, src: 't' }); got = true;
+          break;
+        }
       }
       idle = got ? 0 : idle + 1;
     }
@@ -87,8 +96,9 @@ for (const reg of ['gulf', 'ar', 'msa']) {
       // Gulf cells: sentences that carry a dialect word first (up to GULF_SHARE), the plain ones after
       const want = Math.min(limit, Math.ceil(c.quota * GULF_SHARE));
       const marked = () => c.out.filter((x) => hasGulf(x.text)).length;
-      let marks = marked();
-      while (c.out.length < want && marks < want) { const before = c.out.length; pull(c, c.m, c.mp, before + 1, 'rm'); if (c.out.length === before) break; marks++; }
+      // everything in c.m already carries a marker word, so one call with the number still needed does it
+      const need = Math.min(want, c.quota) - marked();
+      if (need > 0) pull(c, c.m, c.mp, Math.min(limit, c.out.length + need), 'rm');
       pull(c, c.n, c.np, limit, 'rn');
       pull(c, c.m, c.mp, limit, 'rm');
     } else pull(c, c.lists, c.ptr, limit, 'rl');
