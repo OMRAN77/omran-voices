@@ -2,6 +2,9 @@
   "functions": {
     "api/tts.js": {
       "maxDuration": 180
+    },
+    "api/record.js": {
+      "maxDuration": 60
     }
   },
   "headers": [
@@ -19,6 +22,28 @@
         {
           "key": "Permissions-Policy",
           "value": "microphone=(self)"
+        }
+      ]
+    },
+    {
+      "source": "/record.html",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300, must-revalidate"
         }
       ]
     }
