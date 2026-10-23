@@ -78,7 +78,7 @@ test('الحفظ: المستودع يتسوّى خاص، والـWAV بـLFS و�
     assert.strictEqual(lines.length, 2);
     assert.deepStrictEqual(
       { ...lines[0], recorded_at: undefined },
-      { file_name: '00007_aaaaaa01.wav', text: 'شحالك وايد زماان', original_text: 'شحالك وايد زمان', edited: true, speaker: 'سالم أحمد', speaker_id: rec.speakerDir('سالم أحمد'), sentence_id: 7, register: 'gulf', topic: 'سلام', duration: 2, sampling_rate: 24000, recorded_at: undefined, consent: true },
+      { file_name: '00007_aaaaaa01.wav', text: 'شحالك وايد زماان', original_text: 'شحالك وايد زمان', edited: true, speaker: 'سالم أحمد', speaker_id: rec.speakerDir('سالم أحمد'), sentence_id: 7, register: 'gulf', topic: 'سلام', dialect: '', duration: 2, sampling_rate: 24000, recorded_at: undefined, consent: true },
     );
     assert.strictEqual(lines[0].recorded_at, '2026-10-23T08:00:00.000Z');
     assert.strictEqual(lines[1].edited, false, 'نص ما تعدّل = edited:false');

@@ -36,7 +36,7 @@
     flushing: false, again: false, flushTimer: 0, backoff: 0, nextTry: 0, maxItems: 8, keyBad: false,
     stats: null, statsErr: '', shown: { mine: 0, total: 0 }, synced: false,
   };
-  const posKey = () => 'ov_rec_pos:' + L.nameKey(S.name);
+  const posKey = () => 'ov_rec_pos:' + L.nameKey(S.name) + (S.dialect ? ':' + S.dialect : '');
 
   /* ---------- the queue (IndexedDB, with memory as the fallback) ---------- */
   const Q = (() => {
@@ -121,8 +121,9 @@
     const s = cur();
     $('text').value = s[1];
     $('pos').textContent = 'جملة ' + (S.pos + 1);
-    $('topic').textContent = s[3] || '';
-    $('topic').hidden = !s[3];
+    const tag = [s[3], L.dialectLabel(s[5])].filter(Boolean).join(' · ');
+    $('topic').textContent = tag;
+    $('topic').hidden = !tag;
     onEdit();
     setState('idle');
     status('اضغط الميكروفون وتكلّم');
@@ -274,7 +275,7 @@
     if (!text) { status('الجملة فاضية. اكتب النص قبل لا تكمّل.', 'bad'); return; }
     setState('saving');
     const s = cur();
-    const it = { rid: L.newId(), speaker: S.name, sid: s[0], text, original: s[1], reg: s[2], topic: s[3] || '', ts: Date.now(),
+    const it = { rid: L.newId(), speaker: S.name, sid: s[0], text, original: s[1], reg: s[2], topic: s[3] || '', dialect: s[5] || '', ts: Date.now(),
       dur: S.take.seconds, size: S.take.wav.length, wav: S.take.wav };
     await Q.put(it);
     S.pend.set(it.rid, { speaker: it.speaker, dur: it.dur });
@@ -397,7 +398,8 @@
     if (S.synced) return;
     S.synced = true;
     const row = mineRow();
-    if (store.get(posKey()) == null && row && row.count > S.pos && S.state === 'idle') {
+    // (only for the plain order: a picked dialect reorders the start, so the count does not map to a place)
+    if (!S.dialect && store.get(posKey()) == null && row && row.count > S.pos && S.state === 'idle') {
       S.pos = Math.min(row.count, S.order.length);
       store.set(posKey(), String(S.pos));
       showSentence();
@@ -416,9 +418,11 @@
         const r = await fetch('/data/sentences.json');
         if (!r.ok) throw new Error('http ' + r.status);
         S.items = await r.json();
+        // the Gulf dialect sentences (ids 10000+); without them the page still works with the 10 000
+        try { const d = await fetch('/data/dialects.json'); if (d.ok) S.items = S.items.concat(await d.json()); } catch (e) { /* keep the 10 000 */ }
       } catch (e) { setState('idle'); status('ما قدرت أحمّل الجمل. حدّث الصفحة.', 'bad'); return; }
     }
-    S.order = L.buildOrder(S.items, S.name);
+    S.order = L.buildOrder(S.items, S.name, S.dialect);
     const saved = parseInt(store.get(posKey()), 10);
     S.pos = saved > 0 ? Math.min(saved, S.order.length) : 0;
     showSentence();
@@ -432,6 +436,7 @@
     $('app').hidden = true; $('setup').hidden = false;
     $('name').value = S.name;
     $('consent').checked = store.get('ov_rec_consent') === '1';
+    $('dialect').value = S.dialect || '';
     $('seterr').textContent = msg || '';
   }
   function go() {
@@ -441,11 +446,21 @@
     if (!$('consent').checked) { $('seterr').textContent = 'لازم توافق قبل لا نبدأ.'; return; }
     if (L.nameKey(name) !== L.nameKey(S.name)) S.shown = { mine: 0, total: S.shown.total };
     S.name = name;
-    store.set('ov_rec_name', name); store.set('ov_rec_consent', '1');
+    S.dialect = $('dialect').value || '';
+    store.set('ov_rec_name', name); store.set('ov_rec_consent', '1'); store.set('ov_rec_dialect', S.dialect);
     begin();
   }
 
+  function fillDialects() {
+    const sel = $('dialect');
+    for (const d of L.DIALECTS) {
+      const o = document.createElement('option');
+      o.value = d.key; o.textContent = d.label + (d.soon ? ' (قريب)' : ''); o.disabled = !!d.soon;
+      sel.appendChild(o);
+    }
+  }
   function init() {
+    fillDialects();
     const u = new URL(location.href);
     const k = u.searchParams.get('k');
     if (k) {
@@ -490,6 +505,8 @@
     Q.all().then((rows) => {
       rows.forEach((x) => S.pend.set(x.rid, { speaker: x.speaker, dur: x.dur }));
       S.name = store.get('ov_rec_name') || '';
+      S.dialect = store.get('ov_rec_dialect') || '';
+      if (!L.DIALECTS.some((d) => d.key === S.dialect && !d.soon)) S.dialect = '';
       if (S.name && store.get('ov_rec_consent') === '1') begin(); else showSetup('');
     });
   }

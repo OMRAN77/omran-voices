@@ -10,7 +10,11 @@ const lib = require('../record-lib.js');
 const { hasGulf } = require('../tools/sentences/markers.cjs');
 
 const file = path.join(__dirname, '..', 'data', 'sentences.json');
+const dfile = path.join(__dirname, '..', 'data', 'dialects.json');
+// sentences.json = the original 10 000; dialects.json = the Gulf dialect sentences (ids 10000+, 6th field = dialect).
 const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+const extra = JSON.parse(fs.readFileSync(dfile, 'utf8'));
+const all = rows.concat(extra);
 const TOPICS = { 'السلام': 9, 'الأهل': 12, 'الشغل': 13, 'السوق': 13, 'السيارة': 10, 'الأكل': 13, 'الجو': 8, 'البيت': 7, 'الصحة': 5, 'السفر': 4, 'الجوال': 4, 'المناسبات': 2 };
 const norm = (s) => s.replace(/[،؟.!]/g, '').replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/\s+/g, ' ').trim();
 const wordsOf = (s) => s.trim().split(/\s+/).filter(Boolean);
@@ -26,7 +30,7 @@ test('عدد الجمل وشكلها: ١٠٠٠٠ جملة، معرّف متسل�
 });
 
 test('كل جملة من ٥ إلى ١٥ كلمة، عربي فقط بلا أرقام ولا حروف لاتينية ولا تشكيل، وتنتهي بنقطة أو علامة', () => {
-  for (const r of rows) {
+  for (const r of all) {
     const n = wordsOf(r[1]).length;
     assert.ok(n >= 5 && n <= 15, n + ' كلمة: ' + r[1]);
     assert.match(r[1], /^[ء-يٱ ،؟.!]+$/, r[1]);
@@ -39,7 +43,7 @@ test('كل جملة من ٥ إلى ١٥ كلمة، عربي فقط بلا أرق
 
 test('ما فيه جملة مكرّرة (حتى لو اختلفت الهمزة أو النقطة)', () => {
   const seen = new Map();
-  for (const r of rows) {
+  for (const r of all) {
     const k = norm(r[1]);
     assert.ok(!seen.has(k), 'مكرّرة: ' + r[1] + ' = ' + seen.get(k));
     seen.set(k, r[1]);
@@ -121,4 +125,33 @@ test('الملف نفسه ناتج المولّد: نعيد البناء ونق�
   const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'tools', 'build-sentences.mjs'), '--out', dir], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   assert.strictEqual(fs.readFileSync(path.join(dir, 'sentences.json'), 'utf8'), fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'dialects.json'), 'utf8'), fs.readFileSync(dfile, 'utf8'));
+});
+
+test('جمل اللهجات: بعد الـ١٠٠٠٠، معرّف متسلسل، [id, نص, gulf, موضوع, h, لهجة] ولهجة معروفة', () => {
+  assert.ok(extra.length > 0);
+  const keys = lib.DIALECTS.map((d) => d.key);
+  extra.forEach((r, i) => {
+    assert.strictEqual(r.length, 6);
+    assert.strictEqual(r[0], 10000 + i);
+    assert.ok(r[2] === 'gulf' && r[3] in TOPICS && r[4] === 'h' && keys.includes(r[5]), 'صف ' + r[0]);
+  });
+  for (const d of lib.DIALECTS) {
+    const n = extra.filter((r) => r[5] === d.key).length;
+    if (d.soon) assert.strictEqual(n, 0, d.key + ' مكتوبة «قريب» وفيها جمل');
+    else assert.ok(n >= 10, d.key + ' فيها ' + n + ' جملة بس');
+  }
+});
+
+test('اللهجات ما تغيّر ترتيب الـ١٠٠٠٠ لأي أحد، واللي يختار لهجة تطلع له جملها أول', () => {
+  const plain = lib.buildOrder(rows, 'سالم');
+  const withAll = lib.buildOrder(all, 'سالم');
+  assert.deepStrictEqual(withAll.slice(0, 10000), plain, 'الترتيب القديم نفسه');
+  assert.deepStrictEqual(new Set(withAll).size, all.length);
+  const n = extra.filter((r) => r[5] === 'najdi').length;
+  const mine = lib.buildOrder(all, 'سالم', 'najdi');
+  assert.strictEqual(new Set(mine).size, all.length);
+  assert.ok(mine.slice(0, n).every((i) => all[i][5] === 'najdi'));
+  assert.deepStrictEqual(mine.slice(n, n + 10000), plain);
+  assert.deepStrictEqual(lib.buildOrder(all, 'سالم', 'shihhi').slice(0, 10000), plain, 'لهجة بلا جمل = الترتيب العادي');
 });
