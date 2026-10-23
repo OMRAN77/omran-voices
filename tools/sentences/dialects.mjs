@@ -6,7 +6,9 @@
 // Adding a dialect: put its key and name in DIALECTS (record-lib.js), then its sentences here.
 // Shihhi (شحّي) and Baharna (بحراني) are listed on the page as "soon": their sentences have to be
 // written by people who speak them, so the engine does not learn a guessed accent.
-export default {
+import more from './dialects-2.mjs';
+
+const first = {
   hijazi: {
     'السلام': ['هلا والله، كيفك يا شيخ؟ زمان عنك.', 'إيش أخبارك؟ إن شاء الله كلو تمام.', 'الله يسلمك، كلو بخير والحمد لله يا أخويا.'],
     'الأهل': ['أمي تقول تعالوا كلكم تتغدوا عندنا يوم الجمعة.', 'أخويا الصغير دحين صار يروح المدرسة لوحده.'],
@@ -94,3 +96,13 @@ export default {
   shihhi: {},
   baharna: {},
 };
+
+// first + more, topic by topic. Once recordings exist, add new sentences at the END of a list only.
+const out = {};
+for (const src of [first, more]) {
+  for (const [k, topics] of Object.entries(src)) {
+    out[k] = out[k] || {};
+    for (const [t, list] of Object.entries(topics)) out[k][t] = (out[k][t] || []).concat(list);
+  }
+}
+export default out;
