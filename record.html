@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<meta name="robots" content="noindex, nofollow">
+<title>تسجيل الأصوات — عمران</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  :root { --bg:#0b0b0c; --card:#151517; --card2:#1c1b1e; --gold:#d4af37; --gold2:#f0d27a; --text:#f3efe4; --muted:#b3ab9e; --line:#2e2a22; --bad:#ff8a7a; --ok:#8fdc9a; --rec:#e5584b; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Segoe UI", Tahoma, "Noto Sans Arabic", sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom)); min-height: 100vh; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 16px; }
+  header { display:flex; align-items:center; gap:12px; padding: 6px 0 14px; }
+  header img { width:38px; height:38px; border-radius:10px; }
+  header h1 { font-size: 21px; margin:0; color: var(--gold2); }
+  header small { color: var(--muted); display:block; font-size: 13px; }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 17px; margin: 0 0 12px; color: var(--gold2); }
+  label.f { display:block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
+  input[type=text], textarea {
+    width:100%; background: var(--card2); color: var(--text); border:1px solid var(--line); border-radius: 12px;
+    padding: 12px; font: inherit; font-size: 16px; outline: none; }
+  input[type=text]:focus, textarea:focus { border-color: var(--gold); }
+  button { font: inherit; cursor: pointer; border-radius: 12px; border: 1px solid var(--line); background: var(--card2); color: var(--text); padding: 11px 14px; font-size: 15px; }
+  button:hover:not(:disabled) { border-color: var(--gold); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .primary { background: linear-gradient(180deg, var(--gold2), var(--gold)); color: #1a1408; border: none; font-weight: 700; font-size: 17px; padding: 14px; }
+  .link { background: none; border: none; color: var(--gold2); padding: 4px 6px; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+  .check { display:flex; gap:10px; align-items:flex-start; margin: 14px 0; font-size: 14px; line-height: 1.7; color: var(--muted); }
+  .check input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--gold); flex: none; }
+  pre { margin: 0; white-space: pre-wrap; font: inherit; line-height: 1.9; color: var(--text); }
+  .err { color: var(--bad); font-size: 14px; min-height: 20px; margin-top: 8px; }
+
+  /* the sentence */
+  .meta { display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+  .tag { border:1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--card2); }
+  .tag.edited { color: var(--gold2); border-color: var(--gold); }
+  .meta .grow { flex: 1; }
+  #text { font-size: 26px; line-height: 1.9; text-align: center; min-height: 120px; resize: none; overflow: hidden; background: transparent; border-color: transparent; padding: 8px 4px; }
+  #text:hover:not(:disabled) { border-color: var(--line); }
+  #text:focus { background: var(--card2); }
+  #text:disabled { color: var(--text); -webkit-text-fill-color: var(--text); opacity: 1; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 4px; }
+
+  /* the recorder */
+  .stage { display:flex; flex-direction: column; align-items:center; gap: 10px; padding: 8px 0 4px; }
+  #timer { font-variant-numeric: tabular-nums; font-size: 22px; color: var(--muted); height: 30px; }
+  .rec-on #timer { color: var(--rec); }
+  .mic { --lvl: 0; margin: 16px 0 12px; position: relative; width: 104px; height: 104px; border-radius: 50%; border: none; padding: 0; color: #1a1408;
+    background: radial-gradient(circle at 35% 30%, var(--gold2), var(--gold)); display:flex; align-items:center; justify-content:center;
+    box-shadow: 0 0 0 calc(4px + var(--lvl) * 26px) rgba(212,175,55,.18); transition: box-shadow .08s linear, background .2s; }
+  .mic svg { width: 46px; height: 46px; fill: currentColor; }
+  .rec-on .mic { background: radial-gradient(circle at 35% 30%, #ff8d80, var(--rec)); color: #fff; box-shadow: 0 0 0 calc(4px + var(--lvl) * 26px) rgba(229,88,75,.28); }
+  .mic .sq { display: none; width: 34px; height: 34px; border-radius: 6px; background: currentColor; }
+  .rec-on .mic svg { display: none; } .rec-on .mic .sq { display: block; }
+  #status { min-height: 24px; font-size: 15px; color: var(--muted); text-align: center; }
+  #status.warn { color: var(--gold2); } #status.bad { color: var(--bad); } #status.ok { color: var(--ok); }
+  .review { display:flex; flex-direction: column; gap: 12px; align-items: stretch; }
+  .review audio { width: 100%; height: 44px; }
+  .pair { display:flex; gap: 10px; } .pair > button { flex: 1; min-width: 0; }
+  .pair .primary { flex: 2; }
+  .under { display:flex; justify-content: center; gap: 10px; margin-top: 10px; }
+
+  /* counters */
+  .bar { display:flex; gap: 10px; align-items: stretch; }
+  .bar .cell { flex: 1; background: var(--card2); border-radius: 12px; padding: 10px 12px; text-align: center; min-width: 0; }
+  .cell b { display:block; font-size: 20px; color: var(--gold2); font-variant-numeric: tabular-nums; }
+  .cell span { font-size: 12px; color: var(--muted); }
+  details.people { margin-top: 12px; }
+  details.people summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  .p { display:flex; align-items:center; gap: 10px; margin-top: 8px; font-size: 14px; }
+  .p .n { flex: 0 0 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .p .b { flex: 1; height: 8px; background: var(--card2); border-radius: 999px; overflow: hidden; }
+  .p .b i { display:block; height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold2)); border-radius: 999px; }
+  .p .m { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .p.me .n { color: var(--gold2); font-weight: 700; }
+  .pend { display:flex; align-items:center; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13px; color: var(--muted); }
+  .pend.late { color: var(--gold2); }
+  .keys { display:none; }
+  @media (hover:hover) and (pointer:fine) { .keys { display:block; } }
+  #toast { position: fixed; inset-inline: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); margin: 0 auto; max-width: 480px; background: #26231b; border: 1px solid var(--gold); color: var(--text); padding: 12px 14px; border-radius: 12px; font-size: 14px; z-index: 9; }
+  .done { text-align: center; line-height: 2; }
+  .done b { color: var(--gold2); font-size: 20px; }
+  @media (max-width: 420px) { #text { font-size: 23px; } .mic { width: 96px; height: 96px; } }
+  @media (prefers-reduced-motion: reduce) { .mic { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/icon.svg" alt="">
+    <div><h1>تسجيل الأصوات</h1><small>لهجتنا الإماراتية، جملة جملة</small></div>
+  </header>
+
+  <section id="checkCard" class="card" hidden>
+    <h2>فحص الإعدادات</h2>
+    <pre id="checkOut"></pre>
+  </section>
+
+  <section id="badkey" class="card" hidden>
+    <h2>الرابط ناقص</h2>
+    <p>افتح الرابط الخاص اللي أرسله لك عمران كامل. إذا ضاع اطلبه منه مرة ثانية.</p>
+  </section>
+
+  <section id="setup" class="card" hidden>
+    <h2>أهلًا فيك</h2>
+    <label class="f" for="name">اكتب اسمك (يطلع في عدّاد الدقايق)</label>
+    <input id="name" type="text" maxlength="30" autocomplete="off" autocapitalize="words" placeholder="مثلًا: سالم">
+    <label class="check"><input id="consent" type="checkbox"><span>أوافق إن صوتي واسمي ونص الجمل يتسجّلون ويتحفظون في مستودع خاص، ويُستخدمون لتدريب محرك الأصوات الإماراتي.</span></label>
+    <button id="go" class="primary" style="width:100%" type="button">يلا نبدأ</button>
+    <div id="seterr" class="err" role="alert"></div>
+  </section>
+
+  <main id="app" hidden>
+    <section class="card" id="sentenceCard">
+      <div class="meta">
+        <span id="pos" class="tag"></span>
+        <span id="topic" class="tag" hidden></span>
+        <span id="edited" class="tag edited" hidden>معدّلة</span>
+        <span class="grow"></span>
+        <button id="revert" class="link" type="button" hidden>↺ الأصل</button>
+      </div>
+      <textarea id="text" rows="2" aria-label="الجملة" spellcheck="false" lang="ar"></textarea>
+      <div class="hint" id="texthint">إذا الجملة فيها غلط اضغط عليها وعدّلها قبل لا تسجّل.</div>
+    </section>
+
+    <section class="card done" id="doneCard" hidden>
+      <b>خلّصت كل الجمل!</b><br>شكرًا لك، ما بقى شي. تسجيلاتك محفوظة.
+    </section>
+
+    <section class="card" id="stageCard">
+      <div class="stage" id="stage">
+        <div id="timer">0:00</div>
+        <button id="mic" class="mic" type="button" aria-label="سجّل">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+          <span class="sq"></span>
+        </button>
+        <div id="status" role="status" aria-live="polite"></div>
+      </div>
+      <div class="review" id="review" hidden>
+        <audio id="player" controls></audio>
+        <div class="pair">
+          <button id="redo" type="button">عيد</button>
+          <button id="next" class="primary" type="button">التالي ✓</button>
+        </div>
+      </div>
+      <div class="under"><button id="skip" type="button">تخطّى</button></div>
+      <div class="hint keys">المسافة: سجّل / وقّف · Enter: التالي · R: عيد · S: تخطّى</div>
+    </section>
+
+    <section class="card" id="counter">
+      <div class="bar">
+        <div class="cell"><b id="mine">0</b><span>أنت</span></div>
+        <div class="cell"><b id="total">0</b><span>المجموع الكلي</span></div>
+      </div>
+      <details class="people" id="peopleBox">
+        <summary id="peopleSum">مين سجّل كم</summary>
+        <div id="people"></div>
+      </details>
+      <div class="pend" id="pend" hidden><span id="pendText"></span><button id="sync" class="link" type="button">ارفع الآن</button></div>
+      <div class="pend"><span id="who"></span><button id="rename" class="link" type="button">غيّر الاسم</button></div>
+    </section>
+  </main>
+</div>
+<div id="toast" hidden></div>
+<script src="/record-lib.js"></script>
+<script src="/record.js"></script>
+</body>
+</html>

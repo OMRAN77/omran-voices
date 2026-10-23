@@ -15,16 +15,32 @@ function decodeKey(v) {
 // pasted into Vercel often carries a trailing newline.
 const norm = (s) => String(s).normalize('NFC').trim();
 
-module.exports = function checkAccess(req, res) {
-  const expected = norm(process.env.VOICES_ACCESS_KEY || '');
-  if (!expected) {
-    res.status(500).json({ error: 'كلمة السر مو مضبوطة في Vercel (VOICES_ACCESS_KEY).' });
-    return false;
-  }
-  const given = norm(decodeKey(req.headers['x-access-key']));
-  if (!crypto.timingSafeEqual(sha256(given), sha256(expected))) {
-    res.status(401).json({ error: 'كلمة السر غلط.' });
-    return false;
-  }
-  return true;
-};
+// One checker per key. The site password (VOICES_ACCESS_KEY, header X-Access-Key) is the
+// default export. The recording page has its OWN key (VOICES_RECORD_KEY, header X-Record-Key):
+// the private link the owner sends to friends must never open the voice engine, whose
+// free Hugging Face quota belongs to the owner.
+function makeCheck({ env, header, missing, wrong }) {
+  return function check(req, res) {
+    const expected = norm(process.env[env] || '');
+    if (!expected) {
+      res.status(500).json({ error: missing });
+      return false;
+    }
+    const given = norm(decodeKey(req.headers[header]));
+    if (!crypto.timingSafeEqual(sha256(given), sha256(expected))) {
+      res.status(401).json({ error: wrong });
+      return false;
+    }
+    return true;
+  };
+}
+
+const checkAccess = makeCheck({
+  env: 'VOICES_ACCESS_KEY',
+  header: 'x-access-key',
+  missing: 'كلمة السر مو مضبوطة في Vercel (VOICES_ACCESS_KEY).',
+  wrong: 'كلمة السر غلط.',
+});
+
+module.exports = checkAccess;
+module.exports.makeCheck = makeCheck;
