@@ -27,17 +27,25 @@ class VoicesError extends Error {
 
 const dataset = () => String(process.env.VOICES_DATASET || 'omran77/omran-voices-donors').trim();
 
+// A file at the top of the dataset: no folders, no "..". Browser downloads may add
+// spaces or brackets ("voices (1).json"), so the name is URL-encoded, not rejected.
+const okName = (name) => !!name && !/[\\/]|\.\./.test(name) && name.length <= 200;
+
 async function readFile(name) {
-  if (!/^[\w.-]+$/.test(name)) throw new VoicesError('اسم ملف الصوت غلط.', 400, 'input');
+  if (!okName(name)) throw new VoicesError('اسم ملف الصوت غلط.', 400, 'input');
   const dir = process.env.VOICES_DIR;
   if (dir) {
     const p = path.join(dir, name);
-    if (!fs.existsSync(p)) throw new VoicesError('ملف الصوت مو موجود: ' + name, 404, 'missing');
+    if (!fs.existsSync(p)) {
+      const e = new VoicesError('ملف الصوت مو موجود: ' + name, 404, 'missing');
+      e.files = fs.readdirSync(dir);
+      throw e;
+    }
     return fs.readFileSync(p);
   }
   const token = hfToken();
   if (!token) throw new VoicesError('مستودع الأصوات خاص ويحتاج HF_TOKEN في Vercel.', 500, 'no_token');
-  const url = `https://huggingface.co/datasets/${dataset()}/resolve/main/${name}`;
+  const url = `https://huggingface.co/datasets/${dataset()}/resolve/main/${encodeURIComponent(name)}`;
   const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
   if (r.status === 401 || r.status === 403) throw new VoicesError('HF_TOKEN ما يقدر يفتح مستودع الأصوات الخاص (' + r.status + ').', 502, 'denied');
   if (r.status === 404) {
@@ -46,7 +54,9 @@ async function readFile(name) {
     const info = await fetch(`https://huggingface.co/api/datasets/${dataset()}`, { headers: { Authorization: 'Bearer ' + token } }).catch(() => null);
     if (info && info.ok) {
       const files = ((await info.json()).siblings || []).map((s) => s.rfilename).filter((f) => f !== '.gitattributes');
-      throw new VoicesError('ما لقيت ' + name + ' في المستودع ' + dataset() + '. الملفات اللي فيه: ' + (files.join('، ') || 'ولا ملف') + '.', 404, 'missing');
+      const e = new VoicesError('ما لقيت ' + name + ' في المستودع ' + dataset() + '. الملفات اللي فيه: ' + (files.join('، ') || 'ولا ملف') + '.', 404, 'missing');
+      e.files = files;
+      throw e;
     }
     throw new VoicesError('مفتاح HF_TOKEN اللي في Vercel ما يشوف المستودع الخاص ' + dataset() + ': يمكن من حساب ثاني غير omran77، أو ما عنده صلاحية قراءة.', 502, 'denied');
   }
@@ -64,11 +74,24 @@ function clean(entry) {
   return { id, name: name.split(/\s+/)[0], gender, file, data };
 }
 
+// voices.json, or else the dataset's only .json file whatever it is called.
+async function listFile() {
+  try { return await readFile('voices.json'); }
+  catch (e) {
+    const json = (e.files || []).filter((n) => /\.json$/i.test(n));
+    if (e.code !== 'missing' || json.length !== 1) {
+      if (e.code === 'missing' && json.length > 1) e.message += ' وفيه أكثر من ملف json، خلّ واحد بس أو سمّه voices.json.';
+      throw e;
+    }
+    return readFile(json[0]);
+  }
+}
+
 // Full catalog (server side only: includes file names).
 async function catalog() {
   if (listCache && Date.now() - listCache.at < LIST_TTL_MS) return listCache.voices;
   let raw;
-  try { raw = JSON.parse((await readFile('voices.json')).toString('utf8')); }
+  try { raw = JSON.parse((await listFile()).toString('utf8')); }
   catch (e) {
     if (e instanceof VoicesError) throw e;
     throw new VoicesError('voices.json في مستودع الأصوات مو JSON سليم.', 502, 'bad_list');

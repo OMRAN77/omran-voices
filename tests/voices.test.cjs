@@ -165,3 +165,33 @@ test('«مو موجود» من Hugging Face: يفرّق بين ملف ناقص (
       await assert.rejects(fresh('api/_voices.js').list(), (e) => e.code === 'denied' && /HF_TOKEN/.test(e.message));
     } finally { global.fetch = realFetch; fresh('api/_engine.js'); }
   }));
+
+test('بدون voices.json: ملف json وحيد بأي اسم (مثل اسم تنزيل المتصفح) يشتغل، وأكثر من واحد يطلع خطأ واضح', async () => {
+  const one = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-any-'));
+  fs.writeFileSync(path.join(one, 'x7Hq_k2-AbC (1).json'), JSON.stringify([{ id: 'v1', name: 'زهره المخيني', gender: 'f', consent: true, data: WAV.toString('base64') }]));
+  fs.writeFileSync(path.join(one, '24xKs1wM6jVAFqlqMGc_4Q.wav'), WAV);
+  await withEnv({ VOICES_DIR: one }, async () => {
+    assert.deepStrictEqual(await fresh('api/_voices.js').list(), [{ id: 'v1', name: 'زهره', gender: 'f' }]);
+  });
+  fs.writeFileSync(path.join(one, 'second.json'), '[]');
+  await withEnv({ VOICES_DIR: one }, async () => {
+    await assert.rejects(fresh('api/_voices.js').list(), (e) => e.code === 'missing' && /أكثر من ملف json/.test(e.message));
+  });
+});
+
+test('من Hugging Face: الاسم يتشفّر في الرابط، والملف الوحيد ينقرا', () =>
+  withEnv({ VOICES_DIR: undefined, VOICES_DATASET: undefined, HF_TOKEN: 'hf_' + 'Ab1'.repeat(12) }, async () => {
+    const realFetch = global.fetch;
+    const urls = [];
+    try {
+      fresh('api/_engine.js');
+      global.fetch = async (url) => {
+        urls.push(String(url));
+        if (String(url).includes('/api/datasets/')) return Response.json({ siblings: [{ rfilename: '.gitattributes' }, { rfilename: 'voices (1).json' }, { rfilename: 'a.wav' }] });
+        if (String(url).endsWith('/voices.json')) return new Response('Entry not found', { status: 404 });
+        return Response.json([{ id: 'v5', name: 'سعود الشهرياني', gender: 'm', consent: true, data: WAV.toString('base64') }]);
+      };
+      assert.deepStrictEqual(await fresh('api/_voices.js').list(), [{ id: 'v5', name: 'سعود', gender: 'm' }]);
+      assert.ok(urls.includes('https://huggingface.co/datasets/omran77/omran-voices-donors/resolve/main/voices%20(1).json'), urls.join('\n'));
+    } finally { global.fetch = realFetch; fresh('api/_engine.js'); }
+  }));
