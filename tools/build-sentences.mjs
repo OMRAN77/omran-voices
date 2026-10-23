@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { TOPICS, TOTALS, expand, mulberry32, hash32, shuffle, norm, valid, clean, hasGulf } from './sentences/lib.mjs';
+import { TOPICS, TOTALS, MN, FN, expand, mulberry32, hash32, shuffle, norm, valid, clean, hasGulf } from './sentences/lib.mjs';
 import gulf1 from './sentences/gulf-1.mjs';
 import gulf2 from './sentences/gulf-2.mjs';
 import gulf3 from './sentences/gulf-3.mjs';
@@ -15,6 +15,8 @@ import gulf5 from './sentences/gulf-5.mjs';
 import gulf6 from './sentences/gulf-6.mjs';
 import gulf7 from './sentences/gulf-7.mjs';
 import gulf8 from './sentences/gulf-8.mjs';
+import gulf9 from './sentences/gulf-9.mjs';
+import gulf10 from './sentences/gulf-10.mjs';
 import ar from './sentences/ar.mjs';
 import msa from './sentences/msa.mjs';
 
@@ -35,9 +37,62 @@ function merge(...parts) {
   }
   return out;
 }
-const REG = { gulf: merge(gulf1, gulf2, gulf3, [gulf4, 3], [gulf5, 2], [gulf6, 2], gulf7, [gulf8, 5]), ar, msa };
+// Every frame that calls someone by name ("... يا {n}") also gets a twin without the name, so the sentence works
+// both ways and names stay rare (they are capped below).
+function withBare(reg) {
+  const out = {};
+  for (const [t, d] of Object.entries(reg)) {
+    const frames = [];
+    for (const f of d.frames || []) {
+      frames.push(f);
+      const m = /\s+يا\s+\{(n|f)\}/.exec(f.tpl);
+      if (m) frames.push({ ...f, tpl: f.tpl.replace(m[0], '') });
+    }
+    out[t] = { ...d, frames };
+  }
+  return out;
+}
+const REG = {
+  gulf: withBare(merge(gulf1, gulf2, gulf3, [gulf4, 3], [gulf5, 2], [gulf6, 2], gulf7, [gulf8, 5], [gulf9, 2], [gulf10, 2])),
+  ar: withBare(ar), msa: withBare(msa),
+};
+
+// ---- limits against repetition (the owner noticed the same names and phrases again and again) ----
+const NAME_BUDGET = { gulf: 0.06, ar: 0.04, msa: 0.04 };   // share of a register that may call someone by name
+const NAME_CAP = 4;                                         // one name at most this many times in generated sentences
+const START_CAP = 30;                                       // sentences beginning with the same three words
+const GRAM_CAP = 45;                                        // the same four words in a row, anywhere
+const WORD_CAP = { gulf: { 'وايد': 650, 'أبا': 380, 'هني': 330, 'عقب': 330, 'الحين': 330, 'باجر': 300, 'تكفى': 110, 'شو': 260, 'والله': 220 } };
+const tok = (t) => t.replace(/[،؟.!]/g, ' ').split(/\s+/).filter(Boolean);
+const NOT_A_NAME = new Set(['هلا', 'مراحب', 'مرحبا', 'مرحبتين', 'الله', 'رب', 'ليت']);
+const NAMES = new Set([...MN, ...FN].map((x) => clean(x).replace(/[.]$/, '')));
+const use = {};
+for (const r of ['gulf', 'ar', 'msa']) use[r] = { names: new Map(), nameTotal: 0, start: new Map(), gram: new Map(), words: new Map() };
+function caller(ts) {
+  for (let i = 0; i + 1 < ts.length; i++) if (ts[i] === 'يا' && !NOT_A_NAME.has(ts[i + 1])) return ts[i + 1];
+  for (const w of ts) if (NAMES.has(w)) return w;
+  return null;
+}
+const grams = (ts) => { const g = []; for (let i = 0; i + 4 <= ts.length; i++) g.push(ts.slice(i, i + 4).join(' ')); return [...new Set(g)]; };
+function ok(reg, text) {
+  const u = use[reg], ts = tok(text), who = caller(ts);
+  if (who && (u.nameTotal >= Math.round(TOTALS[reg] * NAME_BUDGET[reg]) || (u.names.get(who) || 0) >= NAME_CAP)) return false;
+  const cap = WORD_CAP[reg] || {};
+  for (const w of new Set(ts)) if (cap[w] !== undefined && (u.words.get(w) || 0) >= cap[w]) return false;
+  if ((u.start.get(ts.slice(0, 3).join(' ')) || 0) >= START_CAP) return false;
+  for (const g of grams(ts)) if ((u.gram.get(g) || 0) >= GRAM_CAP) return false;
+  return true;
+}
+function note(reg, text) {
+  const u = use[reg], ts = tok(text), who = caller(ts);
+  if (who) { u.names.set(who, (u.names.get(who) || 0) + 1); u.nameTotal++; }
+  const cap = WORD_CAP[reg] || {};
+  for (const w of new Set(ts)) if (cap[w] !== undefined) u.words.set(w, (u.words.get(w) || 0) + 1);
+  const st = ts.slice(0, 3).join(' '); u.start.set(st, (u.start.get(st) || 0) + 1);
+  for (const g of grams(ts)) u.gram.set(g, (u.gram.get(g) || 0) + 1);
+}
 // Share of each Gulf topic that must carry at least one Gulf marker word (hand-written ones always go in).
-const GULF_SHARE = 0.88;
+const GULF_SHARE = 0.86;
 const REGLABEL = { gulf: 'خليجي', ar: 'عربي', msa: 'فصحى' };
 
 function quotas(total) {
@@ -81,8 +136,8 @@ for (const reg of ['gulf', 'ar', 'msa']) {
         while (ptr[i] < lists[i].length) {
           const s = lists[i][ptr[i]++];
           const n = norm(s);
-          if (seen.has(n)) continue;
-          seen.add(n); c.out.push({ text: s, src: 't' }); got = true;
+          if (seen.has(n) || !ok(reg, s)) continue;
+          seen.add(n); note(reg, s); c.out.push({ text: s, src: 't' }); got = true;
           break;
         }
       }
@@ -91,7 +146,7 @@ for (const reg of ['gulf', 'ar', 'msa']) {
   };
   const take = (c, limit) => {
     // hand-written sentences first, then the frames in turn; the cell remembers where it stopped
-    while (c.out.length < limit && c.hi < c.hand.length) c.out.push({ text: c.hand[c.hi++], src: 'h' });
+    while (c.out.length < limit && c.hi < c.hand.length) { const h = c.hand[c.hi++]; note(reg, h); c.out.push({ text: h, src: 'h' }); }
     if (reg === 'gulf') {
       // Gulf cells: sentences that carry a dialect word first (up to GULF_SHARE), the plain ones after
       const want = Math.min(limit, Math.ceil(c.quota * GULF_SHARE));
@@ -135,18 +190,18 @@ if (failed) { console.error('\nnot enough sentences: add frames'); process.exit(
 // Some composed sentences get a short spoken opener ("والله", "بصراحة،"...), so the lengths and the voice vary
 // instead of every sentence of a frame starting the same way. Hand-written ones are left exactly as written.
 const OPEN = {
-  gulf: [['والله', 30], ['بصراحة،', 30], ['تدري،', 30], ['الصراحة،', 30], ['شوف،', 30], ['أقول،', 30]],
-  ar: [['بصراحة،', 18], ['في الحقيقة،', 18], ['كما تعلم،', 18]],
-  msa: [['في الواقع،', 16], ['في الحقيقة،', 16]],
+  gulf: { rate: 8, list: ['والله', 'بصراحة،', 'تدري،', 'الصراحة،', 'شوف،', 'أقول،', 'ترى،', 'صدقني،'] },
+  ar: { rate: 6, list: ['بصراحة،', 'في الحقيقة،', 'كما تعلم،', 'ربما،'] },
+  msa: { rate: 6, list: ['في الواقع،', 'في الحقيقة،', 'والحقيقة،'] },
 };
 const SKIP_START = /^(أهلا|هلا|مرحب|الله|السلام|وعليكم|صباح|مساء|مبروك|يالله|تكفى|شو|وين|كم|ماذا|هل|كيف|لو|عقب|توني|والله|بصراحة|تدري|شوف|أقول|الصراحة|في )/;
 function dress(x) {
   if (x.src !== 't' || !/\.$/.test(x.text) || SKIP_START.test(x.text) || x.text.includes('والله')) return x.text;
-  const opens = OPEN[x.reg];
+  const { rate, list } = OPEN[x.reg];
   const h = hash32('dress|' + x.text) % 100;
-  const o = opens.find((_, i) => h >= i * (100 / opens.length) && h < i * (100 / opens.length) + (opens[i][1] / opens.length));
-  if (!o) return x.text;
-  const t = o[0] + ' ' + x.text;
+  if (h >= rate) return x.text;
+  const o = list[hash32('open|' + x.text) % list.length];
+  const t = o + ' ' + x.text;
   return valid(t) ? t : x.text;
 }
 

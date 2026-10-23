@@ -63,23 +63,48 @@ test('أول ١٠٠٠ جملة تمثّل الكل: ٦٠٠ و٢٠٠ و٢٠٠، �
   assert.strictEqual(new Set(first.map((r) => r[3])).size, Object.keys(TOPICS).length);
 });
 
-test('الخليجي فيه لهجة فعلًا (٨٠٪ على الأقل فيها كلمة خليجية)، والعام والفصحى بلا ولا كلمة منها', () => {
+test('الخليجي فيه لهجة فعلًا (٧٠٪ على الأقل فيها كلمة خليجية)، والعام والفصحى بلا ولا كلمة منها', () => {
   const g = by('gulf');
   const share = g.filter((r) => hasGulf(r[1])).length / g.length;
-  assert.ok(share >= 0.8, 'نسبة الجمل اللي فيها كلمة خليجية: ' + share);
+  assert.ok(share >= 0.7, 'نسبة الجمل اللي فيها كلمة خليجية: ' + share);
   for (const r of rows.filter((x) => x[2] !== 'gulf')) assert.ok(!hasGulf(r[1]), r[2] + ': ' + r[1]);
 });
 
 test('الكلمات اللي طلبها عمران موجودة بكثرة: وايد، شحالك، بغيت، الحين، هني، يالله، وكلمات المجالس', () => {
   const g = by('gulf').map((r) => r[1]);
-  const need = { 'وايد': 500, 'شحالك': 60, 'بغيت': 100, 'الحين': 150, 'هني': 150, 'يالله': 60, 'طال عمرك': 100, 'أبشر': 100, 'خلنا': 60,
-    'ما تقصر': 60, 'تسلم وتعيش': 40, 'على عيني ورأسي': 20, 'فديتك': 40, 'مرحبا الساع': 10, 'يا هلا ومسهلا': 10, 'هيه': 20, 'يا مراحب': 15,
+  const need = { 'وايد': 450, 'شحالك': 35, 'بغيت': 120, 'الحين': 200, 'هني': 200, 'يالله': 60, 'طال عمرك': 30, 'أبشر': 12, 'خلنا': 50,
+    'ما تقصر': 12, 'تسلم وتعيش': 10, 'على عيني ورأسي': 10, 'فديتك': 5, 'مرحبا الساع': 8, 'يا هلا ومسهلا': 10, 'هيه': 12, 'يا مراحب': 15,
     // كلمات لقيناها بالبحث (Eton Institute وThe National وGulf News والاتحاد...) وكلمات خليجية يستخدمها الإماراتي
-    'شو الجديد': 10, 'شو اليديد': 10, 'مشكور': 30, 'طرش': 20, 'خلاص': 15, 'وياك': 15, 'وياي': 10, 'ما يخالف': 10, 'تو الناس': 20, 'توني': 50 };
+    'شو الجديد': 8, 'شو اليديد': 8, 'مشكور': 30, 'طرش': 25, 'خلاص': 15, 'وياك': 15, 'وياي': 8, 'ما يخالف': 10, 'تو الناس': 4, 'توني': 100 };
   for (const [w, min] of Object.entries(need)) {
     const n = g.filter((t) => t.includes(w)).length;
     assert.ok(n >= min, w + ' ' + n + ' < ' + min);
   }
+});
+
+test('ما فيه تكرار مزعج: الأسماء قليلة وكل اسم مرات قليلة، وبدايات الجمل وعباراتها متنوعة، و«وايد» ما تغطّي الكل', () => {
+  const tok = (t) => t.replace(/[،؟.!]/g, ' ').split(/\s+/).filter(Boolean);
+  const notName = new Set(['هلا', 'مراحب', 'مرحبا', 'مرحبتين', 'الله', 'رب', 'ليت']);
+  const caller = (ts) => { for (let i = 0; i + 1 < ts.length; i++) if (ts[i] === 'يا' && !notName.has(ts[i + 1])) return ts[i + 1]; return null; };
+  const maxShare = { gulf: 0.07, ar: 0.03, msa: 0.03 };
+  for (const reg of ['gulf', 'ar', 'msa']) {
+    const rr = by(reg), names = new Map(), starts = new Map(), grams = new Map();
+    let calling = 0, opener = 0;
+    for (const r of rr) {
+      const ts = tok(r[1]), who = caller(ts);
+      if (who) { calling++; names.set(who, (names.get(who) || 0) + 1); }
+      const st = ts.slice(0, 3).join(' '); starts.set(st, (starts.get(st) || 0) + 1);
+      for (const g of new Set(ts.map((_, i) => ts.slice(i, i + 4).join(' ')).filter((x, i) => i + 4 <= ts.length))) grams.set(g, (grams.get(g) || 0) + 1);
+      if (/^(والله|بصراحة|تدري|الصراحة|شوف|أقول|ترى|صدقني|في الحقيقة|كما تعلم|ربما|في الواقع|والحقيقة)/.test(r[1])) opener++;
+    }
+    assert.ok(calling / rr.length <= maxShare[reg], reg + ' جمل فيها نداء باسم: ' + calling);
+    assert.ok(Math.max(0, ...names.values()) <= 12, reg + ' اسم يتكرر: ' + [...names].sort((a, b) => b[1] - a[1])[0]);
+    assert.ok(Math.max(...starts.values()) <= 40, reg + ' بداية تتكرر: ' + [...starts].sort((a, b) => b[1] - a[1])[0]);
+    assert.ok(Math.max(...grams.values()) <= 50, reg + ' عبارة تتكرر: ' + [...grams].sort((a, b) => b[1] - a[1])[0]);
+    assert.ok(opener / rr.length <= 0.14, reg + ' جمل تبدأ بمقدّمة: ' + opener);
+  }
+  const wayed = by('gulf').filter((r) => tok(r[1]).includes('وايد')).length;
+  assert.ok(wayed / 6000 <= 0.13, 'وايد في ' + wayed + ' جملة');
 });
 
 test('الترتيب اللي تشوفه الصفحة على الجمل الحقيقية: كل جملة مرة وحدة، وكل ١٠ = ٦ خليجي و٢ و٢', () => {

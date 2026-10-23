@@ -1,5 +1,5 @@
 // Emirati/Gulf everyday sentences, part 2: السوق، السيارة، الأكل.
-import { F, MN } from './lib.mjs';
+import { F, MN, VOC } from './lib.mjs';
 
 export default {
   'السوق': {
