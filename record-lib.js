@@ -43,21 +43,45 @@
     for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
     return a;
   }
-  // sentences: [[id, text, reg, topic], ...]. Returns indexes into it. The order depends only on the
-  // name, so the same person gets the same sequence on every device (and a friend starts elsewhere).
-  function buildOrder(sentences, name) {
+  // The Gulf dialects a speaker can pick on the page. Rows of data/sentences.json from id 10000 on carry
+  // one of these keys as a 6th field. `soon`: listed, but its sentences still have to be written by its speakers.
+  const DIALECTS = [
+    { key: 'hijazi', label: 'سعودي حجازي (جدّاوي)' },
+    { key: 'najdi', label: 'سعودي نجدي' },
+    { key: 'kuwaiti', label: 'كويتي' },
+    { key: 'qatari', label: 'قطري' },
+    { key: 'bahraini', label: 'بحريني' },
+    { key: 'omani', label: 'عُماني' },
+    { key: 'shihhi', label: 'شحّي', soon: true },
+    { key: 'baharna', label: 'بحراني', soon: true },
+  ];
+  const dialectLabel = (key) => (DIALECTS.find((d) => d.key === key) || {}).label || '';
+
+  // sentences: [[id, text, reg, topic, src?, dialect?], ...]. Returns indexes into it. The order depends only on
+  // the name (and the picked dialect), so the same person gets the same sequence on every device.
+  // The first 10 000 (no dialect field) keep exactly the order they always had; the dialect rows come after
+  // them, or first of all for a speaker who picked that dialect.
+  function buildOrder(sentences, name, dialect) {
+    const base = [];
+    const byDial = {};
+    sentences.forEach((s, i) => { if (s[5]) (byDial[s[5]] = byDial[s[5]] || []).push(i); else base.push(i); });
     const rnd = mulberry32(hash32('ov-order|' + nameKey(name)));
     const lists = { gulf: [], ar: [], msa: [] };
-    sentences.forEach((s, i) => { (lists[s[2]] || lists.gulf).push(i); });
+    base.forEach((i) => { (lists[sentences[i][2]] || lists.gulf).push(i); });
     for (const r of REGS) lists[r] = shuffled(lists[r], rnd);
     const at = { gulf: 0, ar: 0, msa: 0 };
     const out = [];
-    for (let n = 0; n < sentences.length; n++) {
+    for (let n = 0; n < base.length; n++) {
       let r = PATTERN[n % PATTERN.length];
       if (at[r] >= lists[r].length) r = REGS.find((x) => at[x] < lists[x].length);
       out.push(lists[r][at[r]++]);
     }
-    return out;
+    const drnd = mulberry32(hash32('ov-dialect|' + nameKey(name)));
+    const keys = Object.keys(byDial).sort();
+    const mine = dialect && byDial[dialect] ? shuffled(byDial[dialect], drnd) : [];
+    const rest = [];
+    for (const k of keys) if (k !== dialect || !mine.length) rest.push(...shuffled(byDial[k], drnd));
+    return mine.length ? mine.concat(out, rest) : out.concat(rest);
   }
 
   /* ---------- audio ---------- */
@@ -195,7 +219,7 @@
     return r;
   }
 
-  const api = { TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
+  const api = { TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, DIALECTS, dialectLabel, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OVRec = api;
 })(typeof window !== 'undefined' ? window : globalThis);

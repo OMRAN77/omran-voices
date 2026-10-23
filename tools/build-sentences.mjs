@@ -19,9 +19,10 @@ import gulf9 from './sentences/gulf-9.mjs';
 import gulf10 from './sentences/gulf-10.mjs';
 import ar from './sentences/ar.mjs';
 import msa from './sentences/msa.mjs';
+import dialects from './sentences/dialects.mjs';
 
 const require = createRequire(import.meta.url);
-const { PATTERN } = require('../record-lib.js');
+const { PATTERN, DIALECTS } = require('../record-lib.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The Gulf files each define some topics; gulf-4 adds more sentences (and frames) to topics already defined.
 // A part can be [module, weight]: its frames then get that many turns per round, so the words the owner asked for
@@ -216,10 +217,37 @@ for (let n = 0; n < 10000; n++) {
   const x = lists[reg][at[reg]++];
   rows.push([n, dress(x), x.reg, x.topic, x.src]);
 }
+// Each Gulf dialect's hand-written sentences go to data/dialects.json: ids from 10000 on, dialect key as a 6th field.
+// data/sentences.json (the 10 000) stays exactly as it was, so recordings already made keep their sentence ids.
+const dialectRows = [];
+const dialectCount = {};
+for (const d of DIALECTS) {
+  const def = dialects[d.key];
+  if (!def) throw new Error('missing dialect ' + d.key + ' in tools/sentences/dialects.mjs');
+  dialectCount[d.key] = 0;
+  for (const [t, list] of Object.entries(def)) {
+    if (!TOPICS.some(([x]) => x === t)) throw new Error('unknown topic ' + t + ' in dialect ' + d.key);
+    for (const raw of list) {
+      const s = clean(raw);
+      if (!valid(s)) { dropped.push(['dialect:' + d.key, t, s]); continue; }
+      const n = norm(s);
+      if (seen.has(n)) { dropped.push(['dialect:' + d.key, t, 'dup: ' + s]); continue; }
+      seen.add(n);
+      dialectRows.push([rows.length + dialectRows.length, s, 'gulf', t, 'h', d.key]);
+      dialectCount[d.key]++;
+    }
+  }
+}
+for (const k of Object.keys(dialects)) if (!DIALECTS.some((d) => d.key === k)) throw new Error('dialect ' + k + ' is not in DIALECTS (record-lib.js)');
+console.log('\n== dialects (after the 10000): ' + Object.entries(dialectCount).map(([k, n]) => k + ' ' + n).join(', '));
+if (dropped.some((d) => String(d[0]).startsWith('dialect:'))) { console.error('dialect sentences dropped:\n' + dropped.filter((d) => String(d[0]).startsWith('dialect:')).map((d) => '  ' + d.join(' | ')).join('\n')); process.exit(1); }
+
 const oi = process.argv.indexOf('--out');
 const outDir = oi > 0 ? path.resolve(process.argv[oi + 1]) : path.join(root, 'data');
 fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'sentences.json'), '[\n' + rows.map((r) => JSON.stringify(r)).join(',\n') + '\n]\n');
+fs.writeFileSync(path.join(outDir, 'dialects.json'), '[\n' + dialectRows.map((r) => JSON.stringify(r)).join(',\n') + '\n]\n');
+console.log('wrote ' + path.join(outDir, 'dialects.json') + ': ' + dialectRows.length + ' dialect sentences');
 const hand = rows.filter((r) => r[4] === 'h').length;
 console.log('\nwrote ' + path.join(outDir, 'sentences.json') + ': ' + rows.length + ' sentences (' + hand + ' hand-written, ' + (rows.length - hand) + ' from frames)');
 

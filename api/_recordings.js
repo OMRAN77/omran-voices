@@ -147,7 +147,7 @@ const CARD = [
   'Private dataset. Friends read everyday sentences (Emirati/Gulf dialect, general Arabic, Modern Standard Arabic).',
   'Every WAV is mono 16-bit PCM with its text. `data/<speaker>/<batch>/metadata.jsonl` lists `file_name`, `text`',
   '(what was actually read, after any edit), `original_text`, `edited`, `speaker`, `sentence_id`, `register`,',
-  '`topic`, `duration`, `sampling_rate`, `recorded_at`, `consent`.', '',
+  '`topic`, `dialect` (empty = Emirati/general Gulf), `duration`, `sampling_rate`, `recorded_at`, `consent`.', '',
 ].join('\n');
 
 let repoCheckedAt = 0;
@@ -252,7 +252,7 @@ async function commitFiles(token, files, title) {
 /* ---------- saving ---------- */
 let statsCache = null;
 
-// body: { speaker, consent, items: [{ rid, sid, text, original, reg, topic, ts, wav (base64) }] }
+// body: { speaker, consent, items: [{ rid, sid, text, original, reg, topic, dialect, ts, wav (base64) }] }
 // Returns which recordings are safely stored and which were refused (and why), so the page
 // can delete both from its queue and never retry a recording that can never be accepted.
 async function save(body) {
@@ -285,6 +285,7 @@ async function save(body) {
       meta: {
         text, original_text: original, edited: text !== original, speaker, speaker_id: dir,
         sentence_id: sid, register: REGS.includes(it.reg) ? it.reg : '', topic: cleanText(it.topic, 30),
+        dialect: /^[a-z]{2,20}$/.test(String(it.dialect || '')) ? it.dialect : '',
         duration: w.seconds, sampling_rate: w.rate, recorded_at: isNaN(ts) ? new Date().toISOString() : ts.toISOString(), consent: body.consent === true,
       },
     });

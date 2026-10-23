@@ -21,10 +21,10 @@
   .card { background: var(--card); border:1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
   .card h2 { font-size: 17px; margin: 0 0 12px; color: var(--gold2); }
   label.f { display:block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-  input[type=text], textarea {
+  input[type=text], select, textarea {
     width:100%; background: var(--card2); color: var(--text); border:1px solid var(--line); border-radius: 12px;
     padding: 12px; font: inherit; font-size: 16px; outline: none; }
-  input[type=text]:focus, textarea:focus { border-color: var(--gold); }
+  input[type=text]:focus, select:focus, textarea:focus { border-color: var(--gold); }
   button { font: inherit; cursor: pointer; border-radius: 12px; border: 1px solid var(--line); background: var(--card2); color: var(--text); padding: 11px 14px; font-size: 15px; }
   button:hover:not(:disabled) { border-color: var(--gold); }
   button:disabled { opacity: .45; cursor: not-allowed; }
@@ -110,6 +110,8 @@
     <h2>أهلًا فيك</h2>
     <label class="f" for="name">اكتب اسمك (يطلع في عدّاد الدقايق)</label>
     <input id="name" type="text" maxlength="30" autocomplete="off" autocapitalize="words" placeholder="مثلًا: سالم">
+    <label class="f" for="dialect">لهجتك</label>
+    <select id="dialect"><option value="">إماراتي / خليجي عام</option></select>
     <label class="check"><input id="consent" type="checkbox"><span>أوافق إن صوتي واسمي ونص الجمل يتسجّلون ويتحفظون في مستودع خاص، ويُستخدمون لتدريب محرك الأصوات الإماراتي.</span></label>
     <button id="go" class="primary" style="width:100%" type="button">يلا نبدأ</button>
     <div id="seterr" class="err" role="alert"></div>
