@@ -138,6 +138,13 @@ async function start(opts = {}) {
           : { oid: o.oid, size: o.size, actions: { upload: { href: base + '/s3/' + o.oid, header: {} } } })),
       });
     }
+    // a file's content (api/_engine.js reads the PC's registered address this way)
+    m = /^\/datasets\/([^/]+\/[^/]+)\/resolve\/main\/(.+)$/.exec(path);
+    if (m && req.method === 'GET') {
+      const f = state.repos.has(m[1]) && state.repos.get(m[1]).files.get(m[2]);
+      if (!f) return done(404, { error: 'Entry not found' });
+      return done(200, f.bytes);
+    }
     return done(404, { error: 'unknown route ' + path });
   });
 

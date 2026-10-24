@@ -352,4 +352,4 @@ async function check() {
 
 function reset() { statsCache = null; repoCheckedAt = 0; }
 
-module.exports = { save, stats, check, reset, cleanName, speakerDir, nameOfDir, inspectWav, cleanText, writeToken, RecordError, MAX_ITEMS };
+module.exports = { save, stats, check, reset, commitFiles, cleanName, speakerDir, nameOfDir, inspectWav, cleanText, writeToken, RecordError, MAX_ITEMS };

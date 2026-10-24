@@ -2,9 +2,11 @@
 on the free public demo and its daily limit.
 
 Run start.bat (it installs everything the first time, then starts this file).
-The site (api/_engine.js) reaches it through a tunnel (Tailscale Funnel), using
-OV_ENGINE_URL and OV_ENGINE_KEY in Vercel. When this PC is off, the site falls
-back to the public demo by itself.
+The site reaches this PC through a free Cloudflare quick tunnel (no account): this file
+opens it, and since its address changes on every start, tells the site the new address
+(POST /api/engine with the key). Vercel needs only OV_ENGINE_KEY = the key in
+engine-key.txt. When this PC is off, the site falls back to the public demo by itself.
+--no-tunnel: no tunnel (when OV_ENGINE_URL in Vercel points here some other way).
 
   GET  /health  -> {"ok": true, "device": "..."}
   POST /tts     {text, lang, refId, refWav?, exaggeration, temperature, cfg, seed} -> audio/wav
@@ -23,9 +25,13 @@ import json
 import os
 import re
 import secrets
+import shutil
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import wave
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +47,9 @@ MAX_CHARS = 300
 MAX_REFS = 300
 LANGS = {'ar', 'da', 'de', 'el', 'en', 'es', 'fi', 'fr', 'he', 'hi', 'it', 'ja', 'ko', 'ms', 'nl', 'no', 'pl', 'pt', 'ru', 'sv', 'sw', 'tr', 'zh'}
 REF_ID = re.compile(r'^[0-9a-f]{64}$')
+SITE = os.environ.get('ENGINE_SITE', 'https://omran-voices.vercel.app').rstrip('/')
+CLOUDFLARED_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+TUNNEL_URL = re.compile(r'https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com')
 
 
 def load_key():
@@ -234,6 +243,93 @@ def make_server(engine, key, port=PORT, ref_dir=REF_DIR, host='127.0.0.1'):
     return srv
 
 
+def cloudflared():
+    """cloudflared.exe next to this file (downloaded once from Cloudflare's GitHub), or on PATH."""
+    found = shutil.which('cloudflared')
+    if found:
+        return found
+    exe = HERE / 'cloudflared.exe'
+    if not exe.exists() and os.name == 'nt':
+        print('Downloading cloudflared (the free tunnel, about 60 MB)...')
+        part = exe.with_suffix('.part')
+        try:
+            urllib.request.urlretrieve(CLOUDFLARED_URL, part)
+            part.replace(exe)
+        except OSError as e:
+            print('Could not download cloudflared:', e)
+    return str(exe) if exe.exists() else None
+
+
+SITE_SAYS = {
+    'no_key': 'Vercel has no OV_ENGINE_KEY yet: put the key from engine-key.txt there, then Redeploy.',
+    'key': 'The site refused the key: OV_ENGINE_KEY in Vercel must be exactly the text in engine-key.txt (then Redeploy).',
+    'unreachable': 'The site cannot reach this PC yet (the tunnel needs a few seconds).',
+    'no_token': 'Vercel has no HF_WRITE_TOKEN: the site cannot save the address.',
+}
+
+
+def register(url, key, post=None, wait=time.sleep, current=lambda: None):
+    """Tells the site the tunnel's address, retrying until it accepts (the key may not be in Vercel
+    yet). Stops when a newer tunnel replaced this one (current() is another address)."""
+    post = post or _post
+    body = json.dumps({'url': url}).encode('utf-8')
+    last = None
+    attempt = 0
+    while current() in (None, url):
+        attempt += 1
+        status, code = post(SITE + '/api/engine', body, key)
+        if status == 200:
+            print('The site knows this PC now. Voices come from here while this window is open.')
+            return True
+        msg = SITE_SAYS.get(code) or ('The site is not updated yet (/api/engine missing).' if status == 404 else
+                                      'Could not reach the site (%s), trying again.' % (status or code))
+        if msg != last:
+            print(msg)
+            last = msg
+        wait(min(60, 5 * attempt))
+    return False
+
+
+def _post(url, body, key):
+    req = urllib.request.Request(url, data=body, method='POST',
+                                 headers={'Content-Type': 'application/json', 'X-Engine-Key': key})
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return r.status, None
+    except urllib.error.HTTPError as e:
+        try:
+            code = json.loads(e.read().decode('utf-8')).get('code')
+        except ValueError:
+            code = None
+        return e.code, code
+    except (urllib.error.URLError, OSError) as e:
+        return 0, type(e).__name__
+
+
+def run_tunnel(key, port):
+    """Keeps a Cloudflare quick tunnel open to this engine; a new address is registered every time."""
+    exe = cloudflared()
+    if not exe:
+        print('cloudflared not found: the site cannot reach this PC. Run with --no-tunnel if you use another way.')
+        return
+    newest = {'url': None}
+    while True:
+        p = subprocess.Popen([exe, 'tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:%d' % port],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        seen = False
+        for line in p.stdout:
+            m = None if seen else TUNNEL_URL.search(line)
+            if m:
+                seen = True
+                newest['url'] = m.group(0)
+                print('Tunnel open:', newest['url'])
+                threading.Thread(target=register, args=(newest['url'], key),
+                                 kwargs={'current': lambda: newest['url']}, daemon=True).start()
+        p.wait()
+        print('The tunnel closed; opening a new one in 10 seconds...')
+        time.sleep(10)
+
+
 def main():
     key = load_key()
     print('Loading the voice model (the first time it downloads about 3 GB)...')
@@ -243,6 +339,8 @@ def main():
     print('Voice engine ready on http://127.0.0.1:%d  (%s)' % (PORT, engine.name))
     print('Key for Vercel (OV_ENGINE_KEY) is in: %s' % KEY_FILE)
     print('Keep this window open. Close it to stop the engine.')
+    if '--no-tunnel' not in sys.argv:
+        threading.Thread(target=run_tunnel, args=(key, srv.server_address[1]), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

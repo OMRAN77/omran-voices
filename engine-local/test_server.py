@@ -10,6 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 import wave
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -133,6 +134,45 @@ class ServerTest(unittest.TestCase):
                 server.KEY_FILE = old
         self.assertEqual(k1, k2)
         self.assertGreaterEqual(len(k1), 32)
+
+
+class TunnelTest(unittest.TestCase):
+    def test_tunnel_address_is_found_in_cloudflared_output(self):
+        lines = ['2026-10-24T08:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...',
+                 '2026-10-24T08:00:01Z ERR failed to request quick Tunnel: https://api.trycloudflare.com/tunnel',
+                 '2026-10-24T08:00:02Z INF |  https://brave-lion-river-sun.trycloudflare.com                    |']
+        found = [m.group(0) for m in map(server.TUNNEL_URL.search, lines) if m]
+        self.assertEqual(found, ['https://brave-lion-river-sun.trycloudflare.com'])
+
+    def test_register_retries_until_the_site_accepts(self):
+        answers = [(500, 'no_key'), (500, 'no_key'), (401, 'key'), (502, 'unreachable'), (0, 'URLError'), (200, None)]
+        sent, waits = [], []
+        out = io.StringIO()
+
+        def post(url, body, key):
+            sent.append((url, json.loads(body), key))
+            return answers[len(sent) - 1]
+        with redirect_stdout(out):
+            ok = server.register('https://a-b.trycloudflare.com', KEY, post=post, wait=waits.append)
+        self.assertTrue(ok)
+        self.assertEqual(len(sent), 6)
+        self.assertEqual(sent[0], (server.SITE + '/api/engine', {'url': 'https://a-b.trycloudflare.com'}, KEY))
+        text = out.getvalue()
+        self.assertEqual(text.count('OV_ENGINE_KEY yet'), 1)  # the same advice is not repeated
+        self.assertIn('engine-key.txt', text)
+        self.assertIn('The site knows this PC now', text)
+        self.assertNotIn(KEY, text)
+        self.assertEqual(waits, [5, 10, 15, 20, 25])
+
+    def test_register_stops_when_a_newer_tunnel_replaced_it(self):
+        current = {'url': 'https://old.trycloudflare.com'}
+
+        def post(url, body, key):
+            current['url'] = 'https://new.trycloudflare.com'
+            return 502, 'unreachable'
+        with redirect_stdout(io.StringIO()):
+            ok = server.register('https://old.trycloudflare.com', KEY, post=post, wait=lambda s: None, current=lambda: current['url'])
+        self.assertFalse(ok)
 
 
 if __name__ == '__main__':
