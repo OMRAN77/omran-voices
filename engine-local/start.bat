@@ -12,7 +12,8 @@ for %%V in (3.11 3.12) do (
 if not defined PY python -c "import sys; sys.exit(0 if sys.version_info[:2] in ((3,11),(3,12)) else 1)" >nul 2>nul && set "PY=python"
 if not defined PY goto nopython
 
-rem PyTorch build for the card: RTX 50 series needs CUDA 12.8, older cards CUDA 12.4.
+rem PyTorch build for the card: RTX 50 series needs CUDA 12.8, older cards CUDA 12.4,
+rem and a driver older than 528 (CUDA 11.x only) gets the CUDA 11.8 build.
 set TORCH=2.6.0
 set CUDA=cu124
 nvidia-smi --query-gpu=name --format=csv,noheader > "%TEMP%\omran-gpu.txt" 2>nul
@@ -22,6 +23,9 @@ if errorlevel 1 (
   exit /b 1
 )
 type "%TEMP%\omran-gpu.txt"
+set DRV=0
+for /f "tokens=1 delims=." %%a in ('nvidia-smi --query-gpu^=driver_version --format^=csv^,noheader') do set DRV=%%a
+if %DRV% LSS 528 set CUDA=cu118
 findstr /r /c:"RTX 50[0-9][0-9]" /c:"RTX PRO" "%TEMP%\omran-gpu.txt" >nul && set TORCH=2.7.1&& set CUDA=cu128
 
 echo.

@@ -102,7 +102,11 @@ class Chatterbox:
                 print('GPU not usable by this PyTorch (' + str(e).splitlines()[0] + '), using the CPU (slow).')
                 self.device = 'cpu'
         else:
-            print('No NVIDIA GPU found by PyTorch: using the CPU (slow).')
+            if shutil.which('nvidia-smi'):
+                # The card is there but PyTorch cannot use it: almost always an old driver.
+                print('PyTorch cannot use the NVIDIA card (usually the driver is too old).')
+                print('Update the driver: https://www.nvidia.com/Download/index.aspx then run start.bat again.')
+            print('Using the CPU for now (slow).')
         self.name = torch.cuda.get_device_name(0) if self.device == 'cuda' else 'cpu'
         self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
         self.sr = self.model.sr
