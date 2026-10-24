@@ -16,7 +16,8 @@ const fresh = (rel) => {
 async function withSite(env, fn) {
   const hub = await start();
   hub.state.repos.set(REPO, { private: true, files: new Map() });
-  const pc = await startPc(KEY);
+  let pc;
+  try { pc = await startPc(KEY); } catch (e) { await hub.close(); throw e; }
   const all = { HF_ENDPOINT: hub.url, HF_WRITE_TOKEN: hub.token, HF_TOKEN: hub.token, VOICES_RECORD_DATASET: REPO, OV_ENGINE_KEY: KEY, OV_ENGINE_URL: undefined, ...env };
   const old = {};
   for (const [k, v] of Object.entries(all)) { old[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }

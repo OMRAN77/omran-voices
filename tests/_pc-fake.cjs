@@ -16,8 +16,13 @@ async function startPc(key) {
     'print(s.server_address[1], d, flush=True); s.serve_forever()',
   ].join('\n');
   const child = spawn(python(), ['-c', code, path.join(__dirname, '..', 'engine-local'), key]);
+  // The first line is "<port> <dir>". A pipe can deliver it in pieces: read up to the newline.
   const [port, dir] = await new Promise((resolve, reject) => {
-    child.stdout.once('data', (d) => resolve(String(d).trim().split(' ')));
+    let out = '';
+    child.stdout.on('data', (d) => {
+      out += d;
+      if (out.includes('\n')) resolve(out.split('\n')[0].trim().split(' '));
+    });
     child.once('exit', (c) => reject(new Error('server exited ' + c)));
   });
   return {
