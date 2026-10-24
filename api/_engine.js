@@ -1,9 +1,13 @@
-// The voice engine. Everything that talks to the model lives in this one file,
-// so moving to our own GPU server later means replacing only this file.
+// The voice engine. Everything that talks to the model lives in this one file.
 //
-// Current engine: Chatterbox Multilingual (MIT licence) through the free
-// Hugging Face demo. HF_TOKEN (a free Hugging Face read token) gives the
-// owner's account quota instead of the small anonymous limit.
+// Engine: Chatterbox Multilingual (MIT licence), in two places:
+//  1. The owner's own PC (engine-local/, NVIDIA GPU), reached through a tunnel with
+//     OV_ENGINE_URL + OV_ENGINE_KEY. Used first whenever it answers: no daily limit.
+//  2. The free Hugging Face demo, when the PC is off or not set. HF_TOKEN (a free
+//     Hugging Face read token) gives the owner's account quota there instead of the
+//     small anonymous limit.
+
+const crypto = require('crypto');
 
 const SPACE = 'https://resembleai-chatterbox-multilingual-tts.hf.space';
 const API = SPACE + '/gradio_api';
@@ -121,17 +125,110 @@ async function waitForResult(sessionHash, timeoutMs) {
   }
 }
 
-/**
- * Generates speech for one piece of text (max 300 characters).
- * voice: { wav: Buffer } (a donor's or the user's own voice) or { refPath: '/tmp/gradio/...' }
- * (that WAV already uploaded). There is no built-in voice.
- * Returns { audio: Buffer, refPath?: string }.
- */
-async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0.8, cfg = 0.5, seed = 0, timeoutMs = 150000 }) {
+function checkInput(text, lang) {
   text = String(text || '').trim();
   if (!text) throw new EngineError('ما في كلام.', 400, 'input');
   if (text.length > MAX_CHARS) throw new EngineError('القطعة أطول من ' + MAX_CHARS + ' حرف.', 400, 'input');
   if (!LANGS.includes(lang)) throw new EngineError('اللغة مو مدعومة.', 400, 'input');
+  return text;
+}
+
+// ---------- The owner's own engine (engine-local/server.py on his PC) ----------
+// Used first when OV_ENGINE_URL and OV_ENGINE_KEY are set in Vercel and the PC answers;
+// otherwise the public demo below. A voice sent to the PC comes back as 'local:<sha256>'.
+
+const LOCAL_REF = /^local:([0-9a-f]{64})$/;
+const clean = (s) => String(s || '').replace(/[\s\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+
+function localSettings() {
+  const url = clean(process.env.OV_ENGINE_URL).replace(/\/+$/, '');
+  const key = clean(process.env.OV_ENGINE_KEY);
+  const urlOk = /^https:\/\/[\w.-]+(:\d+)?$/.test(url) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(url);
+  return urlOk && /^[\x21-\x7e]{16,200}$/.test(key) ? { url, key } : null;
+}
+
+// The PC's state is remembered for a short while, so an off PC costs one quick check
+// per half minute instead of a wait on every piece.
+let localState = { status: null, at: 0 };
+const localFresh = () => localState.status !== null && Date.now() - localState.at < (localState.status === 'up' ? 60000 : 30000);
+const markLocal = (status) => { localState = { status, at: Date.now() }; };
+
+/** 'off' (not set) | 'bad' (set wrong) | 'up' | 'down' (PC off or engine closed) | 'badkey' */
+async function localStatus() {
+  const s = localSettings();
+  if (!s) return process.env.OV_ENGINE_URL || process.env.OV_ENGINE_KEY ? 'bad' : 'off';
+  if (localFresh()) return localState.status;
+  let status = 'down';
+  try {
+    const r = await fetch(s.url + '/health', { headers: { 'X-Engine-Key': s.key }, signal: AbortSignal.timeout(4000) });
+    status = r.ok ? 'up' : r.status === 401 ? 'badkey' : 'down';
+  } catch { status = 'down'; }
+  markLocal(status);
+  return status;
+}
+
+async function localGenerate(s, { text, lang, voice, exaggeration, temperature, cfg, seed, timeoutMs }) {
+  let refId;
+  let refWav;
+  if (voice && voice.wav) {
+    refId = crypto.createHash('sha256').update(voice.wav).digest('hex');
+    refWav = Buffer.from(voice.wav).toString('base64');
+  } else if (voice && voice.refPath) {
+    const m = LOCAL_REF.exec(voice.refPath);
+    // A path from the public demo means nothing to the PC: the caller sends the WAV again.
+    if (!m) throw new EngineError('الصوت مو موجود في جهازك.', 410, 'ref_gone');
+    refId = m[1];
+  } else {
+    throw new EngineError('اختار صوت من القائمة.', 400, 'no_voice');
+  }
+  let r;
+  try {
+    r = await fetch(s.url + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Engine-Key': s.key },
+      body: JSON.stringify({ text, lang, refId, refWav, exaggeration, temperature, cfg, seed }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    if (e.name === 'TimeoutError') throw new EngineError('المحرك في جهازك طوّل وايد. جرّب مرة ثانية.', 504, 'timeout');
+    markLocal('down');
+    throw new EngineError('جهازك ما رد.', 503, 'local_down');
+  }
+  if (r.ok) return { audio: Buffer.from(await r.arrayBuffer()), refPath: refWav ? 'local:' + refId : undefined };
+  let j = {};
+  try { j = await r.json(); } catch { /* the tunnel's own error page, not JSON */ }
+  if (r.status === 410) throw new EngineError('الصوت انمسح من جهازك.', 410, 'ref_gone');
+  if (r.status === 400 || r.status === 413) throw new EngineError('المحرك في جهازك رفض الطلب.', 400, 'input');
+  if (r.status === 500 && j.code === 'engine') throw new EngineError('المحرك في جهازك ما قدر يسوي الصوت: ' + String(j.error || '').slice(0, 200));
+  // 401 = the key in Vercel is not the PC's; 502/530… = the tunnel is up but the engine is closed.
+  markLocal(r.status === 401 ? 'badkey' : 'down');
+  throw new EngineError('جهازك ما رد (' + r.status + ').', 503, 'local_down');
+}
+
+/**
+ * Generates speech for one piece of text (max 300 characters).
+ * voice: { wav: Buffer } (a donor's or the user's own voice) or { refPath } (that WAV
+ * already sent: '/tmp/gradio/...' on the public demo, 'local:<sha256>' on the owner's PC).
+ * There is no built-in voice. Returns { audio: Buffer, refPath?: string }.
+ */
+async function generate(args) {
+  const text = checkInput(args.text, args.lang);
+  const s = localSettings();
+  if (s && (await localStatus()) === 'up') {
+    try {
+      return await localGenerate(s, { ...args, text, timeoutMs: args.timeoutMs || 90000 });
+    } catch (e) {
+      if (e.code !== 'local_down') throw e;
+    }
+  }
+  if (args.voice && args.voice.refPath && LOCAL_REF.test(args.voice.refPath)) {
+    throw new EngineError('جهازك مطفي، فالصوت ينرسل للمحرك العام.', 410, 'ref_gone');
+  }
+  return spaceGenerate(args);
+}
+
+async function spaceGenerate({ text, lang, voice, exaggeration = 0.5, temperature = 0.8, cfg = 0.5, seed = 0, timeoutMs = 150000 }) {
+  text = checkInput(text, lang);
 
   let refPath;
   let uploaded;
@@ -170,4 +267,4 @@ async function generate({ text, lang, voice, exaggeration = 0.5, temperature = 0
   return { audio: Buffer.from(await a.arrayBuffer()), refPath: uploaded };
 }
 
-module.exports = { generate, hfToken, EngineError, LANGS, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };
+module.exports = { generate, localStatus, hfToken, EngineError, LANGS, MAX_CHARS, name: 'Chatterbox Multilingual (Hugging Face)' };

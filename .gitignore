@@ -2,3 +2,6 @@ node_modules
 .vercel
 .env*
 __pycache__/
+engine-local/.venv/
+engine-local/refs/
+engine-local/engine-key.txt
