@@ -84,8 +84,12 @@ def run(cmd, log=None):
         if log is None:
             print(line, end='')
     if p.wait() != 0:
-        print(''.join(tail))
-        raise RuntimeError(f'failed ({p.returncode}): {cmd}')
+        # the cause goes into the error itself: it is the red text under the cell
+        raise RuntimeError(f'failed ({p.returncode}): {cmd}\\n' + ''.join(tail[-15:]))
+
+
+def out(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
 
 
 def hours_left():
@@ -130,26 +134,44 @@ REPO_FILES = set(api.list_repo_files(MODEL_REPO))
 ENVS = '''
 # Two separate Python 3.11 environments: the voice engine (makes the data) and Piper (trains),
 # each with the exact versions it was written for, away from the notebook's own packages.
+# A file ".ok" marks an environment as finished, so a half-made one is made again.
 run('pip install -q uv')
 PY_A, PY_B = str(W / 'envA/bin/python'), str(W / 'envB/bin/python')
 TORCH = 'torch==2.6.0 torchaudio==2.6.0'
 CU = '--index-url https://download.pytorch.org/whl/cu124'
-if not Path(PY_A).exists():
-    run('uv venv envA --python 3.11 --seed -q')
+if not Path('envA/.ok').exists():
+    run('rm -rf envA && uv venv envA --python 3.11 --seed -q')
     run(f'uv pip install -q --python {PY_A} {TORCH} {CU}')
     run(f'uv pip install -q --python {PY_A} -r reqA.txt {TORCH}')
     run(f'uv pip install -q --python {PY_A} --no-deps chatterbox-tts==0.1.7')
-if not Path(PY_B).exists():
-    if not Path('piper1-gpl').exists():
-        run('git clone -q https://github.com/OHF-voice/piper1-gpl.git piper1-gpl')
-        run('cd piper1-gpl && (git checkout -q v1.8.0 || echo "no tag v1.8.0: using main")')
-    run('uv venv envB --python 3.11 --seed -q')
+    Path('envA/.ok').touch()
+if not Path('envB/.ok').exists():
+    # Piper from PyPI (its espeak part comes built). Building it from source needs cmake, and
+    # cmake 4 refuses older projects.
+    run('rm -rf envB && uv venv envB --python 3.11 --seed -q')
     run(f'uv pip install -q --python {PY_B} {TORCH} {CU}')
-    run(f'{PY_B} -m pip install -q scikit-build cmake ninja cython wheel "setuptools<81" numpy huggingface_hub')
-    run(f'cd piper1-gpl && {PY_B} -m pip install -q -e ".[train]"')
-    run(f'cd piper1-gpl && PATH={W}/envB/bin:$PATH ./build_monotonic_align.sh && {PY_B} setup.py build_ext --inplace')
+    run(f'uv pip install -q --python {PY_B} "piper-tts[train]==1.8.0" cython numpy setuptools huggingface_hub {TORCH}')
+    # The alignment step is a small Cython file the PyPI package leaves out: build it from Piper's source.
+    if not Path('piper1-gpl').exists():
+        run('git clone -q --depth 1 --branch v1.8.0 https://github.com/OHF-voice/piper1-gpl.git piper1-gpl'
+            ' || git clone -q --depth 1 https://github.com/OHF-voice/piper1-gpl.git piper1-gpl')
+    mab = Path('mabuild')
+    mab.mkdir(exist_ok=True)
+    shutil.copy('piper1-gpl/src/piper/train/vits/monotonic_align/core.pyx', mab / 'core.pyx')
+    (mab / 'setup.py').write_text('from setuptools import setup, Extension\\n'
+                                  'from Cython.Build import cythonize\\n'
+                                  'import numpy\\n'
+                                  "setup(ext_modules=cythonize([Extension('core', ['core.pyx'], include_dirs=[numpy.get_include()])]))\\n")
+    run(f'cd mabuild && {PY_B} setup.py -q build_ext --inplace')
+    dest = Path(out([PY_B, '-c', 'import piper, os; print(os.path.dirname(piper.__file__))'])) / 'train/vits/monotonic_align/monotonic_align'
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / '__init__.py').touch()
+    for so in mab.glob('core*.so'):
+        shutil.copy(so, dest)
+    Path('envB/.ok').touch()
 run([PY_A, '-c', 'from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print("voice engine ok")'])
-run([PY_B, '-c', 'from piper.phonemize_espeak import EspeakPhonemizer; print("piper ok", EspeakPhonemizer().phonemize("ar", "هلا والله"))'])
+run([PY_B, '-c', 'from piper.train.vits.monotonic_align import maximum_path; from piper.phonemize_espeak import EspeakPhonemizer;'
+                 ' print("piper ok", EspeakPhonemizer().phonemize("ar", "هلا والله"))'])
 '''
 
 DATA = '''
