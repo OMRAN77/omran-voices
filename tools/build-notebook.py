@@ -150,7 +150,7 @@ if not Path('envB/.ok').exists():
     # cmake 4 refuses older projects.
     run('rm -rf envB && uv venv envB --python 3.11 --seed -q')
     run(f'uv pip install -q --python {PY_B} {TORCH} {CU}')
-    run(f'uv pip install -q --python {PY_B} "piper-tts[train]==1.8.0" cython numpy setuptools huggingface_hub {TORCH}')
+    run(f'uv pip install -q --python {PY_B} "piper-tts[train]==1.8.0" cython numpy "setuptools<81" huggingface_hub {TORCH}')
     # The alignment step is a small Cython file the PyPI package leaves out: build it from Piper's source.
     if not Path('piper1-gpl').exists():
         run('git clone -q --depth 1 --branch v1.8.0 https://github.com/OHF-voice/piper1-gpl.git piper1-gpl'
@@ -169,7 +169,11 @@ if not Path('envB/.ok').exists():
     for so in mab.glob('core*.so'):
         shutil.copy(so, dest)
     Path('envB/.ok').touch()
-run([PY_A, '-c', 'from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print("voice engine ok")'])
+# setuptools 84 has no pkg_resources, which the engine's watermark needs (also for envs made before this line).
+for py in (PY_A, PY_B):
+    run(f'uv pip install -q --python {py} "setuptools<81"')
+run([PY_A, '-c', 'import perth; assert perth.PerthImplicitWatermarker, "watermark not importable";'
+                 ' from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print("voice engine ok")'])
 run([PY_B, '-c', 'from piper.train.vits.monotonic_align import maximum_path; from piper.phonemize_espeak import EspeakPhonemizer;'
                  ' print("piper ok", EspeakPhonemizer().phonemize("ar", "هلا والله"))'])
 '''
