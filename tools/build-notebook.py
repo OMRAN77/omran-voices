@@ -37,18 +37,21 @@ INTRO = '''
 # تدريب صوتين خفيفين (رجل وامرأة) لعمران
 
 النتيجة: نموذج **Piper** واحد فيه صوتين، يشتغل على أي معالج بسرعة، ويتحفظ في مستودعك الخاص
-`omran77/omran-voices-piper` على Hugging Face. كل شي مجاني (كرت Kaggle المجاني).
+`omran77/omran-voices-piper` على Hugging Face. كل شي مجاني. يشتغل على **Google Colab** أو **Kaggle**.
 
-**قبل التشغيل (مرة وحدة):**
-1. يمين الصفحة ← **Settings** ← **Accelerator**: اختر **GPU T4 x2**.
-2. **Settings** ← **Internet**: شغّله (Kaggle يطلب تأكيد رقم الجوال أول مرة).
-3. فوق ← **Add-ons** ← **Secrets** ← **Add Secret**: الاسم `HF_TOKEN` والقيمة مفتاح Hugging Face من نوع **Write**
-   (نفس `HF_WRITE_TOKEN` اللي في Vercel). علّم عليه ✓ عشان النوتبوك يستخدمه.
+**على Google Colab (بدون رقم جوال):**
+1. https://colab.research.google.com ← **File** ← **Upload notebook** ← اختر هالملف.
+2. **Runtime** ← **Change runtime type** ← **T4 GPU** ← Save.
+3. يسار الصفحة أيقونة المفتاح 🔑 (Secrets) ← **Add new secret**: الاسم `HF_TOKEN` والقيمة مفتاح Hugging Face من نوع
+   **Write** (نفس `HF_WRITE_TOKEN` اللي في Vercel)، وفعّل **Notebook access**.
+4. **Runtime** ← **Run all**. لو طلع تحذير إن النوتبوك مب من Google ← **Run anyway**.
+   خلّ الصفحة مفتوحة والجهاز ما ينام. لو Colab قطع: **Run all** مرة ثانية، ويكمل من وين وقف.
 
-**التشغيل:** فوق يمين ← **Save Version** ← **Save & Run All (Commit)** ← Save. يشتغل بروحه حتى لو سكّرت
-الصفحة (حوالي ١١ ساعة). كل ساعة يرفع آخر نسخة من النموذج وعيّنات تسمعها في المستودع (`samples/`).
+**على Kaggle (يحتاج تأكيد رقم الجوال):** Settings ← Accelerator **GPU T4 x2** و Internet **On**، و Add-ons ← Secrets
+← `HF_TOKEN` (✓)، ثم Save Version ← **Save & Run All (Commit)**. يشتغل بروحه حتى لو سكّرت الصفحة.
 
-**تبغى تحسّنه؟** شغّله مرة ثانية: يكمل من آخر نسخة ويستخدم نفس البيانات بدون ما يولّدها من جديد.
+كل ساعة يرفع آخر نسخة من النموذج وعيّنات تسمعها في المستودع (`samples/`). تشغيلة ثانية تكمل من آخر نسخة
+وتستخدم نفس البيانات.
 '''
 
 CONFIG = '''
@@ -58,7 +61,7 @@ SENTENCES_PER_VOICE = 700             # تقريبًا ساعة كلام لكل 
 MODEL_REPO = 'omran77/omran-voices-piper'
 DONORS_REPO = 'omran77/omran-voices-donors'
 SENTENCES_URL = 'https://omran-voices.vercel.app/data/sentences.json'
-SESSION_HOURS = 11.5                  # Kaggle يوقف الجلسة بعد ١٢ ساعة
+SESSION_HOURS = 11.5                  # أطول جلسة (Kaggle ١٢ ساعة؛ Colab ممكن يقطع قبل، والرفع كل ساعة يحفظ الشغل)
 UPLOAD_EVERY_MIN = 60
 VOICE_FILE = 'ar_AE-omran-medium'
 '''
@@ -68,12 +71,12 @@ import base64, json, os, shutil, subprocess, tarfile, time, urllib.request
 from pathlib import Path
 
 T0 = time.time()
-W = Path('/kaggle/working')
+W = next(p for p in (Path('/kaggle/working'), Path('/content'), Path.cwd()) if p.exists())
 os.chdir(W)
 
 
 def run(cmd, log=None):
-    """Runs a command and shows its output here (Kaggle hides a child process's own output)."""
+    """Runs a command and shows its output here (the notebook hides a child process's own output)."""
     p = subprocess.Popen(cmd, shell=isinstance(cmd, str), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     tail = []
     for line in p.stdout:
@@ -89,8 +92,25 @@ def hours_left():
     return SESSION_HOURS - (time.time() - T0) / 3600
 
 
-from kaggle_secrets import UserSecretsClient
-HF_TOKEN = UserSecretsClient().get_secret('HF_TOKEN').strip()
+def secret(name):
+    """The secret from Kaggle (Add-ons > Secrets) or Colab (the key icon), whichever this is."""
+    try:
+        from kaggle_secrets import UserSecretsClient
+        return UserSecretsClient().get_secret(name)
+    except ImportError:
+        pass
+    try:
+        from google.colab import userdata
+    except ImportError:
+        return os.environ.get(name, '')
+    try:
+        return userdata.get(name)
+    except Exception as e:
+        raise RuntimeError('ضيف السر HF_TOKEN من أيقونة المفتاح يسار الصفحة، وفعّل Notebook access') from e
+
+
+HF_TOKEN = (secret('HF_TOKEN') or '').strip()
+assert HF_TOKEN.startswith('hf_'), 'السر HF_TOKEN ناقص أو مب مفتاح Hugging Face'
 from huggingface_hub import HfApi, hf_hub_download
 api = HfApi(token=HF_TOKEN)
 print('Hugging Face account:', api.whoami()['name'])
@@ -98,9 +118,9 @@ print('Hugging Face account:', api.whoami()['name'])
 gpus = [g for g in subprocess.run(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
                                   capture_output=True, text=True).stdout.splitlines() if g.strip()]
 print('GPUs:', gpus)
-assert gpus, 'ما في كرت: Settings ← Accelerator ← GPU T4 x2'
+assert gpus, 'ما في كرت: Colab ← Runtime ← Change runtime type ← T4 GPU (أو Kaggle ← Accelerator ← GPU T4 x2)'
 if not all('T4' in g for g in gpus):
-    print('تنبيه: الأفضل GPU T4 x2 (الكرت P100 قديم على هالمكتبات).')
+    print('تنبيه: الأفضل T4 (الكرت P100 قديم على هالمكتبات).')
 
 api.create_repo(MODEL_REPO, private=True, exist_ok=True)
 assert api.model_info(MODEL_REPO).private, MODEL_REPO + ' لازم يكون Private'
@@ -109,7 +129,7 @@ REPO_FILES = set(api.list_repo_files(MODEL_REPO))
 
 ENVS = '''
 # Two separate Python 3.11 environments: the voice engine (makes the data) and Piper (trains),
-# each with the exact versions it was written for, away from Kaggle's own packages.
+# each with the exact versions it was written for, away from the notebook's own packages.
 run('pip install -q uv')
 PY_A, PY_B = str(W / 'envA/bin/python'), str(W / 'envB/bin/python')
 TORCH = 'torch==2.6.0 torchaudio==2.6.0'
@@ -153,38 +173,56 @@ print(len(json.loads(Path('sentences.json').read_text())), 'sentences')
 '''
 
 GENERATE = '''
-# Step 1: the engine reads ~700 sentences in each voice (both GPUs at once). If an earlier run
-# already saved the data in the repo, it is reused.
+# Step 1: the engine reads ~700 sentences in each voice (one voice per GPU). What is made is saved
+# in the repo every 20 minutes, so a run cut off (Colab) continues where it stopped.
 DATA_TAR = 'data/train-data.tar'
-if DATA_TAR in REPO_FILES and not Path('data/wav').exists():
-    with tarfile.open(hf_hub_download(MODEL_REPO, DATA_TAR, token=HF_TOKEN)) as t:
-        t.extractall('.')
-    print('reused data from', MODEL_REPO)
-else:
-    procs = []
-    for k, (vid, spk) in enumerate(VOICES):
-        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(k % len(gpus)), HF_TOKEN=HF_TOKEN)
-        cmd = [PY_A, 'gen_data.py', '--ref', f'ref_{spk}.wav', '--speaker', spk, '--part', str(k),
-               '--count', str(SENTENCES_PER_VOICE), '--sentences', 'sentences.json',
-               '--dialect', 'dialect.json', '--out', 'data', '--max-minutes', '150']
-        if len(gpus) == 1 and procs:
-            procs[-1][1].wait()
-        procs.append((spk, subprocess.Popen(cmd, env=env, stdout=open(f'gen_{spk}.log', 'w'), stderr=subprocess.STDOUT)))
-    while any(p.poll() is None for _, p in procs):
-        time.sleep(120)
-        for spk, _ in procs:
-            lines = Path(f'gen_{spk}.log').read_text(errors='replace').splitlines()
-            print(time.strftime('%H:%M'), lines[-1] if lines else '...')
-    for spk, p in procs:
-        print(Path(f'gen_{spk}.log').read_text(errors='replace')[-1500:])
-        assert p.returncode == 0, spk + ' failed'
+
+
+def save_data():
     with tarfile.open('train-data.tar', 'w') as t:
         t.add('data')
     api.upload_file(path_or_fileobj='train-data.tar', path_in_repo=DATA_TAR, repo_id=MODEL_REPO, commit_message='training data')
+
+
+def clips(spk):
+    p = Path(f'data/{spk}.tsv')
+    return len(p.read_text(encoding='utf-8').splitlines()) if p.exists() else 0
+
+
+if DATA_TAR in REPO_FILES and not Path('data').exists():
+    with tarfile.open(hf_hub_download(MODEL_REPO, DATA_TAR, token=HF_TOKEN)) as t:
+        t.extractall('.')
+    print('data from an earlier run:', {spk: clips(spk) for _, spk in VOICES})
+
+# a voice with 85% of its sentences is done (the rest were refused by the length check)
+todo = [(k, spk) for k, (vid, spk) in enumerate(VOICES) if clips(spk) < 0.85 * SENTENCES_PER_VOICE]
+running, last_save = [], time.time()
+while todo or running:
+    while todo and len(running) < len(gpus):
+        k, spk = todo.pop(0)
+        gpu = min(set(range(len(gpus))) - {g for _, _, g in running})
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), HF_TOKEN=HF_TOKEN)
+        cmd = [PY_A, 'gen_data.py', '--ref', f'ref_{spk}.wav', '--speaker', spk, '--part', str(k),
+               '--count', str(SENTENCES_PER_VOICE), '--sentences', 'sentences.json',
+               '--dialect', 'dialect.json', '--out', 'data', '--max-minutes', '150']
+        running.append((spk, subprocess.Popen(cmd, env=env, stdout=open(f'gen_{spk}.log', 'a'), stderr=subprocess.STDOUT), gpu))
+    time.sleep(120)
+    for item in list(running):
+        spk, p, _ = item
+        lines = Path(f'gen_{spk}.log').read_text(errors='replace').splitlines()
+        print(time.strftime('%H:%M'), lines[-1] if lines else '...')
+        if p.poll() is not None:
+            running.remove(item)
+            if p.returncode != 0:
+                print('\\n'.join(lines[-30:]))
+                raise RuntimeError(spk + ' failed')
+    if time.time() - last_save > 20 * 60 or not (todo or running):
+        save_data()
+        last_save = time.time()
 for _, spk in VOICES:
-    n = len(Path(f'data/{spk}.tsv').read_text(encoding='utf-8').splitlines())
-    secs = sum((Path('data/wav') / ln.split('\\t')[0]).stat().st_size - 44 for ln in Path(f'data/{spk}.tsv').read_text(encoding='utf-8').splitlines()) / 2 / 22050
-    print(f'{spk}: {n} clips, {secs / 60:.0f} minutes')
+    rows = Path(f'data/{spk}.tsv').read_text(encoding='utf-8').splitlines()
+    secs = sum((Path('data/wav') / ln.split('\\t')[0]).stat().st_size - 44 for ln in rows) / 2 / 22050
+    print(f'{spk}: {len(rows)} clips, {secs / 60:.0f} minutes')
 '''
 
 TRAIN = '''

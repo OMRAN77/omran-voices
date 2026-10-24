@@ -91,9 +91,10 @@ https://omran-voices.vercel.app
   الموقع. المقطع اللي طوله ما يناسب جملته (قطع أو ثرثرة بعدها) ينرفض. تقريبًا ساعة لكل صوت.
 - **التدريب:** Piper يبدأ من الصوت العربي «kareem» ويتعلّم الصوتين في نموذج واحد. النص ينشكّل تلقائيًّا بنفس
   طريقة Piper وقت الكلام، فيتدرّب على نفس اللي بيقراه بعدين.
-- **الخطوات:** افتح https://www.kaggle.com ← Create ← Notebook ← File ← Import Notebook ← ارفع
-  `train/omran-voices-piper.ipynb`، وبعدها اتبع أول خلية (GPU T4 x2، Internet، سر `HF_TOKEN` من نوع Write،
-  ثم Save Version ← Save & Run All). حوالي ١١ ساعة، والصفحة ما يحتاج تبقى مفتوحة.
+- **الخطوات:** على **Google Colab** (بدون رقم جوال): https://colab.research.google.com ← File ← Upload notebook ←
+  `train/omran-voices-piper.ipynb`، ثم Runtime ← Change runtime type ← T4 GPU، وسر `HF_TOKEN` (مفتاح Write) من أيقونة
+  المفتاح مع Notebook access، ثم Runtime ← Run all، والصفحة تبقى مفتوحة؛ لو قطع، Run all يكمل من وين وقف.
+  أو على **Kaggle** (يحتاج تأكيد رقم): GPU T4 x2 وInternet وسر `HF_TOKEN`، ثم Save & Run All (يشتغل والصفحة مسكّرة).
 - **النتيجة** في المستودع الخاص `omran77/omran-voices-piper`: `ar_AE-omran-medium.onnx` و`.onnx.json`،
   وعيّنات تسمعها في `samples/`، وآخر نسخة للتكملة `ckpt/last.ckpt`، والبيانات `data/train-data.tar`.
   كل ساعة ترتفع نسخة جديدة. تشغيلة ثانية تكمل من آخر نسخة وتستخدم نفس البيانات.
