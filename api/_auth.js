@@ -28,6 +28,8 @@ function makeCheck({ env, header, missing, wrong }) {
     }
     const given = norm(decodeKey(req.headers[header]));
     if (!crypto.timingSafeEqual(sha256(given), sha256(expected))) {
+      // For the owner's Vercel logs only: lengths, never the values. "received 0" = the page sent no key at all.
+      console.warn(env + ': key mismatch (received ' + given.length + ' chars, expected ' + expected.length + ' chars)');
       res.status(401).json({ error: wrong });
       return false;
     }

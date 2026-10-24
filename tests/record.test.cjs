@@ -198,6 +198,22 @@ function call(handler, { method = 'POST', key, body, query } = {}) {
   return Promise.resolve(handler(req, res)).then(() => res);
 }
 
+test('مفتاح غلط: يكتب في سجل Vercel أطوال المفتاح بس (وصل كم حرف، المتوقع كم)، ولا يطلّع قيمته أبدًا', () =>
+  withHub(async () => {
+    const handler = fresh('api/record.js');
+    const old = console.warn, seen = [];
+    console.warn = (...a) => seen.push(a.join(' '));
+    try {
+      const none = await call(handler, { key: undefined, body: {} });
+      const wrong = await call(handler, { key: 'omranvoices2025', body: {} });
+      assert.strictEqual(none.code, 401); assert.strictEqual(wrong.code, 401);
+      assert.ok(seen.some((l) => /VOICES_RECORD_KEY: key mismatch \(received 0 chars, expected 10 chars\)/.test(l)), seen.join(' | '));
+      assert.ok(seen.some((l) => /received 15 chars/.test(l)), seen.join(' | '));
+      assert.ok(!seen.some((l) => l.includes('رابط-عمران') || l.includes('omranvoices2025')), 'لا المفتاح الصح ولا المرسل يطلع في السجل');
+      assert.ok(!JSON.stringify([none.body, wrong.body]).includes('رابط-عمران'), 'ولا في الردّ');
+    } finally { console.warn = old; }
+  }));
+
 test('/api/record: المفتاح، الطرق، والـJSON', () =>
   withHub(async (hub) => {
     const handler = fresh('api/record.js');

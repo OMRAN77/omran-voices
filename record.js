@@ -101,6 +101,9 @@
       if (j.token) lines.push('مفتاح الكتابة (HF_WRITE_TOKEN): ' + j.token);
       if (j.user) lines.push('الحساب: ' + j.user);
       if (j.repo) lines.push('المستودع: ' + j.repo + (j.private ? ' (خاص)' : ''));
+      // What this page sent, without showing it all: compare it with the value set in Vercel.
+      const k = String(S.key);
+      lines.push('المفتاح اللي أرسلته: ' + (k.length > 4 ? k.slice(0, 2) + '…' + k.slice(-2) : '…') + ' (' + k.length + ' حرف)');
       lines.push(r.ok && j.ok ? 'النتيجة: شغّال ✓' : 'النتيجة: فيه مشكلة — ' + (j.error || j.code || 'غير معروفة'));
       out.textContent = lines.join('\n');
     } catch (e) { out.textContent = 'ما قدرت أوصل للخادم: ' + (e && e.message || e); }
