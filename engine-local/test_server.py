@@ -10,7 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 import wave
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -115,6 +115,26 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.call('/tts', {'text': 'هلا', 'lang': 'ar', 'refId': hashlib.sha256(raw).hexdigest(), 'refWav': base64.b64encode(raw).decode()})
         self.assertEqual(status, 500)
         self.assertEqual(json.loads(body)['code'], 'engine')
+
+    def test_site_gone_before_the_voice_is_ready_is_one_line_not_a_crash(self):
+        real = server.Handler.send_body
+
+        def gone(handler, status, ctype, data):
+            if ctype == 'audio/wav':
+                raise ConnectionAbortedError(10053, 'An established connection was aborted')
+            return real(handler, status, ctype, data)
+        server.Handler.send_body = gone
+        out, err = io.StringIO(), io.StringIO()
+        raw = ref_wav()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                with self.assertRaises(Exception):  # the client gets no answer
+                    self.call('/tts', {'text': 'هلا', 'lang': 'ar', 'refId': hashlib.sha256(raw).hexdigest(), 'refWav': base64.b64encode(raw).decode()})
+        finally:
+            server.Handler.send_body = real
+        self.assertIn('The site stopped waiting', out.getvalue())
+        self.assertNotIn('Traceback', err.getvalue())
+        self.assertEqual(self.call('/health')[0], 200)  # still serving
 
     def test_old_voice_files_are_pruned(self):
         d = Path(self.dir.name)
