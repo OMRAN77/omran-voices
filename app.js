@@ -170,7 +170,15 @@ async function tryUnlock(key) {
     await loadDonors();
     await refreshVoices();
     await renderHistory();
+    // The owner's own engine (engine-local/), when it is set in Vercel.
+    const pc = {
+      up: ['المحرك شغّال على جهازك ✓', 'ok'],
+      down: ['جهازك مطفي أو نافذة المحرك مسكّرة، فالأصوات تطلع من المحرك العام (حدّه صغير).', 'bad'],
+      badkey: ['مفتاح المحرك OV_ENGINE_KEY في Vercel غير اللي في جهازك (engine-key.txt).', 'bad'],
+      bad: ['OV_ENGINE_URL أو OV_ENGINE_KEY في Vercel مكتوب غلط.', 'bad'],
+    }[j.engine];
     if (state.donorErr) setMsg('genMsg', 'ما قدرت أجيب أصوات المتبرعين: ' + state.donorErr, 'bad');
+    else if (pc) setMsg('genMsg', pc[0], pc[1]);
     else if (!state.hfToken) setMsg('genMsg', j.hfTokenSet ? 'ملاحظة: مفتاح Hugging Face (HF_TOKEN) في Vercel غلط، فالمحرك يشتغل بدون حساب والحد صغير وايد.' : 'ملاحظة: HF_TOKEN مو مضبوط في Vercel، فالحد المجاني صغير وايد.', 'bad');
   } catch (e) {
     // Forget the saved password only when it is wrong, not when the network blinks.
