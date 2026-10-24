@@ -62,7 +62,7 @@ MODEL_REPO = 'omran77/omran-voices-piper'
 DONORS_REPO = 'omran77/omran-voices-donors'
 SENTENCES_URL = 'https://omran-voices.vercel.app/data/sentences.json'
 SESSION_HOURS = 11.5                  # أطول جلسة (Kaggle ١٢ ساعة؛ Colab ممكن يقطع قبل، والرفع كل ساعة يحفظ الشغل)
-UPLOAD_EVERY_MIN = 60
+UPLOAD_EVERY_MIN = 30                 # Colab يقطع بدون إنذار: نسخة كل نص ساعة
 VOICE_FILE = 'ar_AE-omran-medium'
 '''
 
@@ -210,18 +210,18 @@ def save_data():
     api.upload_file(path_or_fileobj='train-data.tar', path_in_repo=DATA_TAR, repo_id=MODEL_REPO, commit_message='training data')
 
 
-def clips(spk):
-    p = Path(f'data/{spk}.tsv')
+def clips(spk, ext='tsv'):
+    p = Path(f'data/{spk}.{ext}')
     return len(p.read_text(encoding='utf-8').splitlines()) if p.exists() else 0
 
 
 if DATA_TAR in REPO_FILES and not Path('data').exists():
     with tarfile.open(hf_hub_download(MODEL_REPO, DATA_TAR, token=HF_TOKEN)) as t:
         t.extractall('.')
-    print('data from an earlier run:', {spk: clips(spk) for _, spk in VOICES})
+    print('data from an earlier run:', {spk: (clips(spk), clips(spk, 'rejected')) for _, spk in VOICES})
 
-# a voice with 85% of its sentences is done (the rest were refused by the length check)
-todo = [(k, spk) for k, (vid, spk) in enumerate(VOICES) if clips(spk) < 0.85 * SENTENCES_PER_VOICE]
+# a voice is done when every one of its sentences was tried (kept, or refused by the length check)
+todo = [(k, spk) for k, (vid, spk) in enumerate(VOICES) if clips(spk) + clips(spk, 'rejected') < SENTENCES_PER_VOICE - 2]
 running, last_save = [], time.time()
 while todo or running:
     while todo and len(running) < len(gpus):

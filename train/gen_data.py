@@ -9,8 +9,9 @@ checks below is kept. It runs on Kaggle's free GPU, inside train/omran-voices-pi
 
 Writes data/wav/<speaker>_<sentence id>.wav (22 050 Hz mono 16-bit, what Piper trains on) and
 appends "<file>\t<text>" to data/<speaker>.tsv. The text is the sentence as written (what the app
-will send later), not the respelled one the engine reads. Run it again and it continues: a
-sentence already in the .tsv is skipped.
+will send later), not the respelled one the engine reads. A sentence refused twice by the length
+check goes to data/<speaker>.rejected. Run it again and it continues: a sentence in either file is
+skipped (the same seeds would only make the same refused clip again).
 """
 import argparse
 import json
@@ -125,7 +126,8 @@ def main(argv=None):
     out = Path(a.out)
     (out / 'wav').mkdir(parents=True, exist_ok=True)
     tsv = out / (a.speaker + '.tsv')
-    have = done_ids(tsv)
+    rej = out / (a.speaker + '.rejected')
+    have = done_ids(tsv) | done_ids(rej)
     rules = dialect_rules(json.loads(Path(a.dialect).read_text(encoding='utf-8')))
     todo = [s for s in select(json.loads(Path(a.sentences).read_text(encoding='utf-8')), a.count, a.part)
             if f'{a.speaker}_{s[0]}.wav' not in have]
@@ -136,8 +138,9 @@ def main(argv=None):
         model.prepare_conditionals(a.ref, exaggeration=0.5)
     t0 = time.time()
     kept = rejected = 0
-    with tsv.open('a', encoding='utf-8') as log:
+    with tsv.open('a', encoding='utf-8') as log, rej.open('a', encoding='utf-8') as rejlog:
         for i, (sid, text, reg) in enumerate(todo, 1):
+            name = f'{a.speaker}_{sid}.wav'
             if a.max_minutes and time.time() - t0 > a.max_minutes * 60:
                 print(f'[{a.speaker}] time is up, stopping', flush=True)
                 break
@@ -153,9 +156,10 @@ def main(argv=None):
                     break
             if not ok:
                 rejected += 1
+                rejlog.write(name + '\n')
+                rejlog.flush()
                 continue
             y = librosa.resample(y, orig_sr=model.sr, target_sr=SR_OUT)
-            name = f'{a.speaker}_{sid}.wav'
             write_wav(out / 'wav' / name, to_int16(y))
             log.write(f'{name}\t{text}\n')
             log.flush()
