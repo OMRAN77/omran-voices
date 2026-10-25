@@ -86,8 +86,9 @@ class FilesTest(unittest.TestCase):
             (d / 'm.tsv').write_text('m_1.wav\tهلا والله\nm_9.wav\tما انحفظ صوتها\nm_1.wav\tهلا والله\n', encoding='utf-8')
             (d / 'f.tsv').write_text('f_2.wav\tشحالك | اليوم\n', encoding='utf-8')
             self.assertEqual(gen_data.done_ids(d / 'm.tsv'), {'m_1.wav', 'm_9.wav'})
-            lines = prep_train.build(d, lambda t: '<' + t + '>')
-            self.assertEqual(lines, ['f_2.wav|f|<شحالك   اليوم>', 'm_1.wav|m|<هلا والله>'])
+            # one list per voice, in Piper's one-voice format: each voice is its own model
+            self.assertEqual(prep_train.build(d, 'm', lambda t: '<' + t + '>'), ['m_1.wav|<هلا والله>'])
+            self.assertEqual(prep_train.build(d, 'f', lambda t: '<' + t + '>'), ['f_2.wav|<شحالك   اليوم>'])
 
 
 class NotebookTest(unittest.TestCase):
