@@ -147,23 +147,12 @@ PY_A, PY_B = str(W / 'envA/bin/python'), str(W / 'envB/bin/python')
 TORCH = 'torch==2.6.0 torchaudio==2.6.0'
 CU = '--index-url https://download.pytorch.org/whl/cu124'
 if not Path('envA/.ok').exists():
-    # neucodec (the teacher's codec) with the versions that load together on torch 2.8 (checked: imports ok)
+    # the teacher on the GPU (Transformers, as its reference code) and its codec neucodec, with the
+    # versions that load together on torch 2.8 (checked: imports ok)
     run('rm -rf envA && uv venv envA --python 3.11 --seed -q')
     run(f'uv pip install -q --python {PY_A} torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126')
     run(f'uv pip install -q --python {PY_A} neucodec==0.0.6 torch==2.8.0 torchaudio==2.8.0 torchao==0.13.0 '
-        '"transformers<5" librosa soundfile huggingface_hub')
-    # llama.cpp runs the teacher's text model: built for this GPU (T4) when the CUDA compiler is here
-    # (~15 min, ~1 s a sentence), else the ready processor build (several seconds a sentence)
-    try:
-        assert shutil.which('nvcc') or Path('/usr/local/cuda/bin/nvcc').exists(), 'no CUDA compiler'
-        run(f'CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75" CUDACXX=/usr/local/cuda/bin/nvcc '
-            f'uv pip install -q --python {PY_A} llama-cpp-python')
-    except Exception as e:
-        print('GPU build of llama.cpp failed, using the processor build:', str(e)[-500:])
-        try:  # a ready-made processor build, otherwise it compiles one (a few minutes)
-            run(f'uv pip install -q --python {PY_A} --reinstall llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu')
-        except RuntimeError:
-            run(f'uv pip install -q --python {PY_A} --reinstall llama-cpp-python')
+        '"transformers>=4.57,<5" librosa soundfile huggingface_hub')
     Path('envA/.ok').touch()
 if not Path('envB/.ok').exists():
     # Piper from PyPI (its espeak part comes built). Building it from source needs cmake, and
@@ -189,8 +178,7 @@ if not Path('envB/.ok').exists():
     for so in mab.glob('core*.so'):
         shutil.copy(so, dest)
     Path('envB/.ok').touch()
-run([PY_A, '-c', 'import llama_cpp, neucodec, torch; print("teacher ok, llama.cpp on GPU:", llama_cpp.llama_supports_gpu_offload(),'
-                 ' "torch GPU:", torch.cuda.is_available())'])
+run([PY_A, '-c', 'import neucodec, torch, transformers; print("teacher ok, GPU:", torch.cuda.is_available(), transformers.__version__)'])
 run([PY_B, '-c', 'from piper.train.vits.monotonic_align import maximum_path; from piper.phonemize_espeak import EspeakPhonemizer;'
                  ' print("piper ok", EspeakPhonemizer().phonemize("ar", "هلا والله"))'])
 '''

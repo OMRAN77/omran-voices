@@ -2,8 +2,9 @@
 
 Audar-TTS Flash (Arabic-first, AudarAI Open License: commercial use allowed) reads formal Arabic
 (fusha) sentences in a donor's voice, from that donor's short sample (about 14 seconds); every clip
-that passes the length check below is kept. It runs on Kaggle's free GPU, inside
-train/omran-voices-piper.ipynb.
+that passes the length check below is kept. It runs on Kaggle's free GPU (the Transformers weights
+of the official reference code, github.com/AudarAI/Audar-TTS-V1), inside train/omran-voices-piper.ipynb.
+Its GGUF build on llama.cpp ran on the processor there: ~30 sentences in two hours.
 
 Why Audar and fusha: the first teacher (Chatterbox, Gulf sentences) and two other engines all came
 out with a foreign accent to the owner's ear; Audar reading vowelled fusha was "a clear improvement".
@@ -33,7 +34,8 @@ SHARE = {'msa': 1.0}  # formal Arabic only
 AUDAR_REPO = 'audarai/Audar-TTS-V1-Flash'
 CODEC_REPO = 'neuphonic/neucodec'  # gated: accept its terms once on Hugging Face
 CODEC_SR = 24000
-MAX_CODES = 2048  # 50 codes a second: ~40 s, far more than a sentence
+MAX_CODES = 1500  # 50 codes a second: 30 s, far more than a sentence (the reference code's limit)
+PAD_ID = 151643   # the backbone's pad token (as in the reference code)
 
 
 # --- which sentences ----------------------------------------------------------------------------
@@ -113,41 +115,41 @@ def done_ids(tsv):
 
 # --- the engine ---------------------------------------------------------------------------------
 class Audar:
+    """The reference code's path: the Transformers backbone on the GPU, the neucodec codec."""
+
     def __init__(self, ref_wav):
         import os
         import librosa
         import torch
-        from huggingface_hub import HfApi, hf_hub_download
-        from llama_cpp import Llama, llama_supports_gpu_offload
         from neucodec import NeuCodec
+        from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch = torch
         self.dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-        ggufs = [f for f in HfApi().list_repo_files(AUDAR_REPO) if f.endswith('.gguf')]
-        pick = next((f for k in ('Q8_0', 'Q4_K_M') for f in ggufs if k in f), ggufs[0])
-        gpu = llama_supports_gpu_offload() and self.dev == 'cuda'
-        print('engine:', pick, 'on', 'GPU' if gpu else 'processor', flush=True)
-        self.llm = Llama(model_path=hf_hub_download(AUDAR_REPO, pick), n_ctx=4096, n_gpu_layers=-1 if gpu else 0,
-                         n_threads=os.cpu_count(), verbose=False)
+        # float32: a T4 has no bfloat16 (the reference code's type), and the model is small (0.55 B)
+        self.tok = AutoTokenizer.from_pretrained(AUDAR_REPO, subfolder='transformers')
+        self.model = AutoModelForCausalLM.from_pretrained(AUDAR_REPO, subfolder='transformers',
+                                                          torch_dtype=torch.float32).eval().to(self.dev)
         self.codec = NeuCodec.from_pretrained(CODEC_REPO, token=os.environ.get('HF_TOKEN')).eval().to(self.dev)
-        self.end = self.llm.tokenize(b'<|TARGET_CODES_END|>', add_bos=False, special=True)[0]
+        self.end = self.tok.convert_tokens_to_ids('<|TARGET_CODES_END|>')
+        print('engine on', self.dev, flush=True)
         y, _ = librosa.load(ref_wav, sr=16000, mono=True)
         with torch.no_grad():
-            self.ref = self.codec.encode_code(torch.from_numpy(y)[None, None, :]).squeeze().tolist()
+            self.ref = self.codec.encode_code(torch.from_numpy(y)[None, None, :].to(self.dev)).squeeze().tolist()
 
     def say(self, text, seed):
         """24 kHz samples, or None when no speech came out."""
-        self.llm.set_seed(seed)
-        ids = []
-        for tok in self.llm.generate(self.llm.tokenize(prompt(self.ref, text).encode('utf-8'), add_bos=False, special=True),
-                                     temp=1.0, top_k=40, top_p=0.9, repeat_penalty=1.1):
-            if tok == self.end or len(ids) >= MAX_CODES:
-                break
-            ids.append(tok)
-        codes = speech_codes(''.join(self.llm.detokenize([t], special=True).decode('utf-8', 'ignore') for t in ids))
+        torch = self.torch
+        torch.manual_seed(seed)
+        ids = self.tok.encode(prompt(self.ref, text), add_special_tokens=False, return_tensors='pt').to(self.dev)
+        with torch.no_grad():
+            out = self.model.generate(ids, max_new_tokens=MAX_CODES, eos_token_id=self.end, pad_token_id=PAD_ID,
+                                      do_sample=True, temperature=1.0, top_k=40, top_p=0.9, repetition_penalty=1.1,
+                                      min_new_tokens=50)
+        codes = speech_codes(self.tok.decode(out[0, ids.shape[1]:], skip_special_tokens=False))
         if not codes:
             return None
-        with self.torch.no_grad():
-            return self.codec.decode_code(self.torch.tensor(codes, device=self.dev)[None, None, :]).cpu().numpy()[0, 0]
+        with torch.no_grad():
+            return self.codec.decode_code(torch.tensor(codes, device=self.dev)[None, None, :]).cpu().numpy()[0, 0]
 
 
 def main(argv=None):
