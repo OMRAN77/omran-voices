@@ -6,10 +6,10 @@ import sys
 import wave
 from pathlib import Path
 
-TEXTS = [
-    'هلا والله، شحالك اليوم؟',
-    'بغيت أروح السوق الحين بس الجو حار وايد.',
-    'باجر إن شاء الله نتلاقى في البيت عقب صلاة المغرب.',
+TEXTS = [  # formal Arabic, like the training sentences; Piper adds the diacritics itself
+    'مرحبا، كيف حالك اليوم؟',
+    'أريد أن أذهب إلى السوق الآن، لكن الجو حار جدا.',
+    'سنلتقي غدا إن شاء الله في البيت بعد صلاة المغرب.',
 ]
 
 

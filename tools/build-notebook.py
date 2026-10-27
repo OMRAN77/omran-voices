@@ -1,13 +1,11 @@
 """Builds train/omran-voices-piper.ipynb, the Kaggle notebook that trains the light voice model.
 
-  python3 tools/build-notebook.py          (needs node, for the dialect rules of api/_dialect.js)
+  python3 tools/build-notebook.py
 
-The notebook must stand alone (Kaggle cannot read this private repo), so the scripts in train/,
-engine-local/requirements.txt and the dialect rules are written into it. tests/train.test.cjs
-checks the committed notebook equals a fresh build.
+The notebook must stand alone (Kaggle cannot read this private repo), so the scripts in train/ are
+written into it. tests/train.test.cjs checks the committed notebook equals a fresh build.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,16 +26,15 @@ def writefile(name, body):
     return code(f'%%writefile {name}\n' + body.rstrip('\n') + '\n')
 
 
-def dialect_pairs():
-    js = "const d=require('./api/_dialect.js');process.stdout.write(JSON.stringify(d.RULES.map(r=>[r.from,r.to])))"
-    return json.loads(subprocess.run(['node', '-e', js], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
-
-
 INTRO = '''
 # تدريب صوتين خفيفين (رجل وامرأة) لعمران
 
-النتيجة: نموذجين **Piper** صغار، واحد لكل صوت، يشتغلون على أي معالج بسرعة، ويتحفظون في مستودعك الخاص
-`omran77/omran-voices-piper` على Hugging Face. كل شي مجاني. يشتغل على **Google Colab** أو **Kaggle**.
+النتيجة: نموذجين **Piper** صغار بالفصحى، واحد لكل صوت، يشتغلون على أي معالج بسرعة، ويتحفظون في مستودعك
+الخاص `omran77/omran-voices-piper` على Hugging Face. المعلّم **Audar-TTS** (عربي أولًا، تجاري مسموح) يقرا ٧٠٠ جملة
+فصحى مشكّلة بصوت كل متبرع، والنموذج الخفيف يتعلّم منها. كل شي مجاني. يشتغل على **Kaggle** أو **Google Colab**.
+
+**قبل أول تشغيل (مرة وحدة):** وافق على شروط https://huggingface.co/neuphonic/neucodec بحسابك في Hugging Face
+(Audar يحتاجه). بدونها النوتبوك يوقف أول شي ويقول لك.
 
 **على Google Colab (بدون رقم جوال):**
 1. https://colab.research.google.com ← **File** ← **Upload notebook** ← اختر هالملف.
@@ -63,7 +60,8 @@ DONORS_REPO = 'omran77/omran-voices-donors'
 SENTENCES_URL = 'https://omran-voices.vercel.app/data/sentences.json'
 SESSION_HOURS = 11.5                  # أطول جلسة (Kaggle ١٢ ساعة؛ Colab ممكن يقطع قبل، والرفع كل ساعة يحفظ الشغل)
 UPLOAD_EVERY_MIN = 30                 # Colab يقطع بدون إنذار: نسخة كل نص ساعة
-VOICE_FILE = 'ar_AE-omran_{}-medium'  # ملف لكل صوت: ar_AE-omran_m-medium.onnx و ar_AE-omran_f-medium.onnx
+VOICE_FILE = 'ar_AE-omran_{}_fusha-medium'  # ملف لكل صوت: ar_AE-omran_m_fusha-medium.onnx و …_f_fusha-…
+DATA_TAR = 'data/fusha-data.tar'            # بيانات الفصحى (data/train-data.tar القديمة خليجية من المحرك الأول، ما تنستخدم)
 '''
 
 SETUP = '''
@@ -134,10 +132,14 @@ if not all('T4' in g for g in gpus):
 api.create_repo(MODEL_REPO, private=True, exist_ok=True)
 assert api.model_info(MODEL_REPO).private, MODEL_REPO + ' لازم يكون Private'
 REPO_FILES = set(api.list_repo_files(MODEL_REPO))
+try:  # the teacher's codec is gated: without the accepted terms nothing below can work
+    hf_hub_download('neuphonic/neucodec', 'meta.yaml', token=HF_TOKEN)
+except Exception as e:
+    raise RuntimeError('وافق على شروط https://huggingface.co/neuphonic/neucodec بحسابك في Hugging Face، وبعدين شغّل مرة ثانية') from e
 '''
 
 ENVS = '''
-# Two separate Python 3.11 environments: the voice engine (makes the data) and Piper (trains),
+# Two separate Python 3.11 environments: the teacher (Audar, makes the data) and Piper (trains),
 # each with the exact versions it was written for, away from the notebook's own packages.
 # A file ".ok" marks an environment as finished, so a half-made one is made again.
 run('pip install -q uv')
@@ -145,10 +147,23 @@ PY_A, PY_B = str(W / 'envA/bin/python'), str(W / 'envB/bin/python')
 TORCH = 'torch==2.6.0 torchaudio==2.6.0'
 CU = '--index-url https://download.pytorch.org/whl/cu124'
 if not Path('envA/.ok').exists():
+    # neucodec (the teacher's codec) with the versions that load together on torch 2.8 (checked: imports ok)
     run('rm -rf envA && uv venv envA --python 3.11 --seed -q')
-    run(f'uv pip install -q --python {PY_A} {TORCH} {CU}')
-    run(f'uv pip install -q --python {PY_A} -r reqA.txt {TORCH}')
-    run(f'uv pip install -q --python {PY_A} --no-deps chatterbox-tts==0.1.7')
+    run(f'uv pip install -q --python {PY_A} torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126')
+    run(f'uv pip install -q --python {PY_A} neucodec==0.0.6 torch==2.8.0 torchaudio==2.8.0 torchao==0.13.0 '
+        '"transformers<5" librosa soundfile huggingface_hub')
+    # llama.cpp runs the teacher's text model: built for this GPU (T4) when the CUDA compiler is here
+    # (~15 min, ~1 s a sentence), else the ready processor build (several seconds a sentence)
+    try:
+        assert shutil.which('nvcc') or Path('/usr/local/cuda/bin/nvcc').exists(), 'no CUDA compiler'
+        run(f'CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75" CUDACXX=/usr/local/cuda/bin/nvcc '
+            f'uv pip install -q --python {PY_A} llama-cpp-python')
+    except Exception as e:
+        print('GPU build of llama.cpp failed, using the processor build:', str(e)[-500:])
+        try:  # a ready-made processor build, otherwise it compiles one (a few minutes)
+            run(f'uv pip install -q --python {PY_A} --reinstall llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu')
+        except RuntimeError:
+            run(f'uv pip install -q --python {PY_A} --reinstall llama-cpp-python')
     Path('envA/.ok').touch()
 if not Path('envB/.ok').exists():
     # Piper from PyPI (its espeak part comes built). Building it from source needs cmake, and
@@ -174,11 +189,8 @@ if not Path('envB/.ok').exists():
     for so in mab.glob('core*.so'):
         shutil.copy(so, dest)
     Path('envB/.ok').touch()
-# setuptools 84 has no pkg_resources, which the engine's watermark needs (also for envs made before this line).
-for py in (PY_A, PY_B):
-    run(f'uv pip install -q --python {py} "setuptools<81"')
-run([PY_A, '-c', 'import perth; assert perth.PerthImplicitWatermarker, "watermark not importable";'
-                 ' from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print("voice engine ok")'])
+run([PY_A, '-c', 'import llama_cpp, neucodec, torch; print("teacher ok, llama.cpp on GPU:", llama_cpp.llama_supports_gpu_offload(),'
+                 ' "torch GPU:", torch.cuda.is_available())'])
 run([PY_B, '-c', 'from piper.train.vits.monotonic_align import maximum_path; from piper.phonemize_espeak import EspeakPhonemizer;'
                  ' print("piper ok", EspeakPhonemizer().phonemize("ar", "هلا والله"))'])
 '''
@@ -201,13 +213,14 @@ for vid, spk in VOICES:
     print(spk, '<-', vid, v.get('gender'), v.get('seconds'), 's')
 urllib.request.urlretrieve(SENTENCES_URL, 'sentences.json')
 print(len(json.loads(Path('sentences.json').read_text())), 'sentences')
+# the teacher reads the sentences with Piper's own diacritics: exactly the vowels Piper will be given
+run([PY_B, 'prep_train.py', 'vowel', '--sentences', 'sentences.json', '--count', str(SENTENCES_PER_VOICE),
+     '--parts', str(len(VOICES)), '--out', 'vowelled.json'])
 '''
 
 GENERATE = '''
-# Step 1: the engine reads ~700 sentences in each voice (one voice per GPU). What is made is saved
-# in the repo every 20 minutes, so a run cut off (Colab) continues where it stopped.
-DATA_TAR = 'data/train-data.tar'
-
+# Step 1: the teacher reads ~700 formal sentences in each voice (one voice per GPU). What is made is
+# saved in the repo every 20 minutes, so a run cut off (Colab) continues where it stopped.
 
 def save_data():
     with tarfile.open('train-data.tar', 'w') as t:
@@ -235,7 +248,7 @@ while todo or running:
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), HF_TOKEN=HF_TOKEN)
         cmd = [PY_A, 'gen_data.py', '--ref', f'ref_{spk}.wav', '--speaker', spk, '--part', str(k),
                '--count', str(SENTENCES_PER_VOICE), '--sentences', 'sentences.json',
-               '--dialect', 'dialect.json', '--out', 'data', '--max-minutes', '150']
+               '--vowelled', 'vowelled.json', '--out', 'data', '--max-minutes', '150']
         running.append((spk, subprocess.Popen(cmd, env=env, stdout=open(f'gen_{spk}.log', 'a'), stderr=subprocess.STDOUT), gpu))
     time.sleep(120)
     for item in list(running):
@@ -258,12 +271,17 @@ for _, spk in VOICES:
 
 TRAIN = '''
 # Step 2: each voice is its own Piper model, both training at once (one per GPU; on Colab they share it).
-# Each starts from the Arabic voice "kareem" with every layer in place, so it speaks clearly from the
-# start and moves toward the donor's voice (or continues from its own last saved version, on a second
-# run). A model with both voices had new speaker layers that start random: it spoke gibberish.
+# Each starts from the Arabic voice "kareem" (formal Arabic, like the data) with every layer in place, so
+# it speaks clearly from the start and moves toward the donor's voice (or continues from its own last
+# saved version, on a second run). A model with both voices had new speaker layers that start random:
+# it spoke gibberish.
 # It stops in time to export and upload.
 def voice_file(spk):
     return VOICE_FILE.format(spk)
+
+
+def ckpt(spk):  # in the repo; ckpt/m.ckpt and ckpt/f.ckpt are the Gulf run's, not continued
+    return f'ckpt/{spk}_fusha.ckpt'
 
 
 KAREEM = [f.path for f in HfApi().list_repo_tree('rhasspy/piper-checkpoints', path_in_repo='ar/ar_JO/kareem/medium',
@@ -274,9 +292,9 @@ hh, mm = int(left), int((left - int(left)) * 60)
 Path('out').mkdir(exist_ok=True)
 trains = {}
 for k, (_, spk) in enumerate(VOICES):
-    run([PY_B, 'prep_train.py', '--data', 'data', '--speaker', spk, '--out', f'data/{spk}.csv'])
-    if f'ckpt/{spk}.ckpt' in REPO_FILES:
-        warm = hf_hub_download(MODEL_REPO, f'ckpt/{spk}.ckpt', token=HF_TOKEN)
+    run([PY_B, 'prep_train.py', 'list', '--data', 'data', '--speaker', spk, '--out', f'data/{spk}.csv'])
+    if ckpt(spk) in REPO_FILES:
+        warm = hf_hub_download(MODEL_REPO, ckpt(spk), token=HF_TOKEN)
         print(spk, 'continues from its last saved version')
     else:
         warm = hf_hub_download('rhasspy/piper-checkpoints', KAREEM, repo_type='dataset')
@@ -303,7 +321,7 @@ def export(spk):
     onnx = f'out/{voice_file(spk)}.onnx'
     try:
         run([PY_B, '-m', 'piper.train.export_onnx', '--checkpoint', f'snap_{spk}.ckpt', '--output-file', onnx], log=False)
-        run([PY_B, 'samples.py', onnx, 'out/samples', spk], log=False)
+        run([PY_B, 'samples.py', onnx, 'out/samples', f'{spk}_fusha'], log=False)
     except RuntimeError as e:
         print(spk, 'export failed this time:', e)
         return False
@@ -318,7 +336,7 @@ def upload(final=False):
         shutil.copy(f, 'out/logs')
     api.upload_folder(folder_path='out', repo_id=MODEL_REPO, commit_message='models' + (' (final)' if final else ''))
     for spk in done:
-        api.upload_file(path_or_fileobj=f'snap_{spk}.ckpt', path_in_repo=f'ckpt/{spk}.ckpt', repo_id=MODEL_REPO,
+        api.upload_file(path_or_fileobj=f'snap_{spk}.ckpt', path_in_repo=ckpt(spk), repo_id=MODEL_REPO,
                         commit_message='checkpoint ' + spk)
     print(time.strftime('%H:%M'), 'uploaded', done, 'to', MODEL_REPO)
 
@@ -346,13 +364,10 @@ print('done in', round((time.time() - T0) / 3600, 1), 'hours')
 
 
 def build():
-    req = (ROOT / 'engine-local' / 'requirements.txt').read_text(encoding='utf-8')
     cells = [
         md(INTRO),
         code(CONFIG),
         code(SETUP),
-        writefile('reqA.txt', req),
-        writefile('dialect.json', json.dumps(dialect_pairs(), ensure_ascii=False, indent=0)),
         writefile('gen_data.py', (ROOT / 'train' / 'gen_data.py').read_text(encoding='utf-8')),
         writefile('prep_train.py', (ROOT / 'train' / 'prep_train.py').read_text(encoding='utf-8')),
         writefile('samples.py', (ROOT / 'train' / 'samples.py').read_text(encoding='utf-8')),
