@@ -54,7 +54,7 @@ INTRO = '''
 CONFIG = '''
 # ===== الإعدادات =====
 VOICES = [('v5', 'm'), ('v4', 'f')]   # (صوت المتبرع في omran-voices-donors، اسمه في النموذج): رجل، امرأة
-SENTENCES_PER_VOICE = 700             # تقريبًا ساعة كلام لكل صوت
+SENTENCES_PER_VOICE = 1000            # كل جمل الفصحى (٢٠٠٠) بين الصوتين؛ أول تشغيلة ٧٠٠ والطالب طلع أقل من معلّمه
 MODEL_REPO = 'omran77/omran-voices-piper'
 DONORS_REPO = 'omran77/omran-voices-donors'
 SENTENCES_URL = 'https://omran-voices.vercel.app/data/sentences.json'
