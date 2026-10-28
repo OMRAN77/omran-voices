@@ -12,3 +12,6 @@ spacy-pkuseg
 pykakasi==2.3.0
 pyloudnorm
 omegaconf
+# resemble-perth (the watermark) imports pkg_resources, which setuptools 84 no longer has:
+# without it the engine stops at start (PerthImplicitWatermarker is None).
+setuptools<81
