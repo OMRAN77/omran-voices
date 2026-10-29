@@ -1,17 +1,21 @@
-// الصوتين الخفيفين (Piper بالفصحى) على Space مجاني للمالك: طلب عربي بصوت v5 أو v4 يروح له بدل المحرك
-// (ثانية للجملة، بلا حدّ يومي)، بالنص مثل ما انكتب ومفتاح الـSpace (من ملف tts-space في المستودع الخاص)،
-// وموافقة صاحب الصوت تنفحص مثل أيّ صوت. غيرهم، أو قبل ما ينعدّ السيرفر، يبقى على المحرك.
-// السيرفر نايم أو طايح = رسالة واضحة.
+// الصوتين الخفيفين (Piper بالفصحى) في دالّة Python داخل الموقع نفسه (api/piper.py): طلب عربي بصوت v5 أو v4
+// يروح لها بدل المحرك، بالنص مثل ما انكتب ومفتاح محسوب من HF_TOKEN (التوكن نفسه ما يطلع)، وموافقة صاحب
+// الصوت تنفحص مثل أيّ صوت. غيرهم يبقى على المحرك. الدالّة ما ردّت أو طاحت = رسالة واضحة.
 const test = require('node:test');
 const assert = require('node:assert');
+const cp = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { python } = require('./_pc-fake.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const fresh = (rel) => { delete require.cache[require.resolve(path.join(ROOT, rel))]; return require(path.join(ROOT, rel)); };
-const SPACE = 'https://omran77-omran-voices-tts.hf.space';
+const HOST = 'omran-voices.vercel.app';
+const FN = 'https://' + HOST + '/api/piper';
 const TOKEN = 'hf_' + 'a'.repeat(30);
+const KEY = crypto.createHmac('sha256', TOKEN).update('omran-voices-piper').digest('hex');
 const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(40), Buffer.from('data'), Buffer.alloc(800, 3)]);
 
 function storeDir() {
@@ -26,18 +30,14 @@ function storeDir() {
   return dir;
 }
 
-const KEY = 'k'.repeat(43);
-const REG = 'https://huggingface.co/datasets/omran77/omran-voices-recordings/resolve/main/tts-space';
-const registered = (url = SPACE, key = KEY) => new Response(JSON.stringify({ url, key }), { status: 200 });
-
-// space(url, opts) answers the Space and the dataset file; the engine is replaced and counts its calls.
-async function withSite(env, space, fn) {
-  const all = { VOICES_DIR: storeDir(), VOICES_ACCESS_KEY: 'k', HF_TOKEN: TOKEN, OV_PIPER_URL: undefined, OV_PIPER_KEY: undefined, OV_PIPER_OFF: undefined, HF_ENDPOINT: undefined, ...env };
+// fn(url, opts) answers the site's own function; the engine is replaced and counts its calls.
+async function withSite(env, fn, run, host = HOST) {
+  const all = { VOICES_DIR: storeDir(), VOICES_ACCESS_KEY: 'k', HF_TOKEN: TOKEN, OV_PIPER_OFF: undefined, VERCEL_AUTOMATION_BYPASS_SECRET: undefined, ...env };
   const old = {};
   for (const [k, v] of Object.entries(all)) { old[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   const realFetch = global.fetch;
   const calls = [];
-  global.fetch = async (url, opts = {}) => { calls.push({ url: String(url), opts }); return space(String(url), opts); };
+  global.fetch = async (url, opts = {}) => { calls.push({ url: String(url), opts }); return fn(String(url), opts); };
   const engine = fresh('api/_engine.js');
   fresh('api/_voices.js');
   fresh('api/_piper.js');
@@ -47,102 +47,89 @@ async function withSite(env, space, fn) {
     const tts = fresh('api/tts.js');
     const call = async (body) => {
       const res = { headers: {}, code: 0, setHeader(k, v) { this.headers[k] = v; }, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; }, send(b) { this.body = b; return this; } };
-      await tts({ method: 'POST', headers: { 'x-access-key': 'k' }, body }, res);
+      await tts({ method: 'POST', headers: { 'x-access-key': 'k', host }, body }, res);
       return res;
     };
-    return await fn(call, calls, engineCalls);
+    return await run(call, calls, engineCalls);
   } finally {
     global.fetch = realFetch;
     for (const [k, v] of Object.entries(old)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     fresh('api/_engine.js');
   }
 }
-// the dataset file says where the Space is; the Space wants its key
+// the function wants the site's key
 const site = (onTts) => (url, opts) => {
-  if (url === REG) return opts.headers.Authorization === 'Bearer ' + TOKEN ? registered() : new Response('', { status: 401 });
-  if (url === SPACE + '/tts') return opts.headers['X-Space-Key'] === KEY ? onTts(url, opts) : new Response('{"detail":"key"}', { status: 401 });
+  if (url === FN) return opts.headers['X-Piper-Key'] === KEY ? onTts(url, opts) : new Response('{"error":"key"}', { status: 401 });
   throw new Error('unexpected ' + url);
 };
-const okSpace = site(() => new Response(WAV, { status: 200, headers: { 'Content-Type': 'audio/wav' } }));
-const toSpace = (calls) => calls.filter((c) => c.url.startsWith(SPACE));
+const okFn = site(() => new Response(WAV, { status: 200, headers: { 'Content-Type': 'audio/wav' } }));
+const toFn = (calls) => calls.filter((c) => c.url === FN);
 
-test('v5 وv4 بالعربي يروحون للـSpace المسجّل: صوت m وf، النص مثل ما انكتب، والمفتاح بدون مفتاح Hugging Face', () =>
-  withSite({}, okSpace, async (call, calls, engineCalls) => {
+test('v5 وv4 بالعربي يروحون لدالّة الموقع نفسه: صوت m وf، النص مثل ما انكتب، والمفتاح المحسوب بدون التوكن', () =>
+  withSite({}, okFn, async (call, calls, engineCalls) => {
     const r = await call({ text: 'هلا والله، الجو  حار وايد.', lang: 'ar', voice: { donor: 'v5' } });
     assert.strictEqual(r.code, 200);
     assert.strictEqual(r.headers['Content-Type'], 'audio/wav');
     assert.ok(Buffer.from(r.body).equals(WAV));
-    const tts = toSpace(calls);
-    assert.deepStrictEqual(JSON.parse(tts[0].opts.body), { text: 'هلا والله، الجو حار وايد.', voice: 'm' }, 'بدون قاموس اللهجة: Piper يشكّل بروحه');
-    assert.strictEqual(tts[0].opts.headers['X-Space-Key'], KEY);
-    assert.strictEqual(tts[0].opts.headers.Authorization, undefined, 'مفتاح Hugging Face ما يروح للـSpace العام');
+    const fn = toFn(calls);
+    assert.deepStrictEqual(JSON.parse(fn[0].opts.body), { text: 'هلا والله، الجو حار وايد.', voice: 'm' }, 'بدون قاموس اللهجة: Piper يشكّل بروحه');
+    assert.strictEqual(fn[0].opts.headers['X-Piper-Key'], KEY);
+    assert.strictEqual(fn[0].opts.headers.Authorization, undefined);
+    assert.ok(!JSON.stringify(fn[0].opts).includes(TOKEN), 'التوكن نفسه ما يطلع');
     await call({ text: 'مرحبا', lang: 'ar', voice: { donor: 'v4' } });
-    assert.strictEqual(JSON.parse(toSpace(calls)[1].opts.body).voice, 'f');
-    assert.strictEqual(calls.filter((c) => c.url === REG).length, 1, 'ملف العنوان ينقرا مرّة وينحفظ');
+    assert.strictEqual(JSON.parse(toFn(calls)[1].opts.body).voice, 'f');
     assert.strictEqual(engineCalls.length, 0);
   }));
 
-test('صوت ثاني، أو لغة ثانية، أو OV_PIPER_OFF=1، أو الـSpace ما انعدّ: المحرك مثل قبل', async () => {
-  await withSite({}, okSpace, async (call, calls, engineCalls) => {
+test('صوت ثاني، أو لغة ثانية، أو OV_PIPER_OFF=1، أو بدون HF_TOKEN: المحرك مثل قبل', async () => {
+  await withSite({}, okFn, async (call, calls, engineCalls) => {
     assert.strictEqual((await call({ text: 'hello', lang: 'en', voice: { donor: 'v5' } })).code, 200);
     assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v1' } })).code, 200);
     assert.strictEqual(engineCalls.length, 2);
-    assert.strictEqual(toSpace(calls).length, 0);
+    assert.strictEqual(toFn(calls).length, 0);
   });
-  await withSite({ OV_PIPER_OFF: '1' }, okSpace, async (call, calls, engineCalls) => {
-    assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } })).code, 200);
-    assert.strictEqual(engineCalls.length, 1);
-    assert.strictEqual(toSpace(calls).length, 0);
-  });
-  await withSite({}, (url) => (url === REG ? new Response('Entry not found', { status: 404 }) : okSpace(url, {})), async (call, calls, engineCalls) => {
-    assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } })).code, 200);
-    assert.strictEqual(engineCalls.length, 1, 'قبل نوتبوك السيرفر: المحرك');
-    assert.strictEqual(toSpace(calls).length, 0);
-  });
+  for (const env of [{ OV_PIPER_OFF: '1' }, { HF_TOKEN: undefined }]) {
+    await withSite(env, okFn, async (call, calls, engineCalls) => {
+      assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } })).code, 200);
+      assert.strictEqual(engineCalls.length, 1, JSON.stringify(env));
+      assert.strictEqual(toFn(calls).length, 0);
+    });
+  }
 });
 
-test('OV_PIPER_URL وOV_PIPER_KEY يغلبون ملف العنوان', () =>
-  withSite({ OV_PIPER_URL: 'https://other.hf.space/', OV_PIPER_KEY: 'z'.repeat(30) }, (url, opts) => {
-    if (url === 'https://other.hf.space/tts' && opts.headers['X-Space-Key'] === 'z'.repeat(30)) return new Response(WAV);
-    throw new Error('unexpected ' + url);
-  }, async (call, calls) => {
+test('حماية معاينات Vercel: رمز التجاوز ينرسل لو موجود، والعنوان الغلط ينرفض', async () => {
+  await withSite({ VERCEL_AUTOMATION_BYPASS_SECRET: 'b'.repeat(32) }, okFn, async (call, calls) => {
     assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v4' } })).code, 200);
-    assert.strictEqual(calls.filter((c) => c.url === REG).length, 0);
-  }));
-
-test('مفتاح جديد (النوتبوك انعاد): ينقرا ملف العنوان مرّة ثانية ويكمل', () => {
-  let key = 'old'.repeat(10);
-  return withSite({}, (url, opts) => {
-    if (url === REG) return registered(SPACE, key);
-    if (url === SPACE + '/tts') return opts.headers['X-Space-Key'] === 'new'.repeat(10) ? new Response(WAV) : new Response('', { status: 401 });
-    throw new Error('unexpected ' + url);
-  }, async (call, calls) => {
-    await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } }).then((r) => assert.strictEqual(r.code, 502, 'المفتاح القديم وحده'));
-    key = 'new'.repeat(10);
-    const r = await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } });
-    assert.strictEqual(r.code, 200);
+    assert.strictEqual(toFn(calls)[0].opts.headers['x-vercel-protection-bypass'], 'b'.repeat(32));
   });
+  await withSite({}, okFn, async (call, calls) => {
+    assert.strictEqual((await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v4' } })).code, 400);
+    assert.strictEqual(calls.length, 0);
+  }, 'evil.com/x?');
+  assert.strictEqual(fresh('api/_piper.js').address('localhost:3000'), 'http://localhost:3000/api/piper');
 });
 
-test('صوت مو في القائمة (بدون موافقة) ما يوصل الـSpace', () =>
-  withSite({}, okSpace, async (call, calls) => {
+test('صوت مو في القائمة (بدون موافقة) ما يوصل الدالّة', () =>
+  withSite({}, okFn, async (call, calls) => {
     const dir = process.env.VOICES_DIR;
     fs.writeFileSync(path.join(dir, 'voices.json'), JSON.stringify([{ id: 'v5', name: 'سالم', gender: 'm', file: 'v5.wav', consent: false }]));
     fresh('api/_voices.js').reset();
     const r = await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v5' } });
     assert.strictEqual(r.code, 404);
-    assert.strictEqual(toSpace(calls).length, 0);
+    assert.strictEqual(toFn(calls).length, 0);
   }));
 
-test('الـSpace نايم أو طايح أو رجّع شي مب صوت: رسالة واضحة بكود معروف، وما يرجع للمحرك', async () => {
+test('الدالّة ما ردّت أو طاحت أو رجّعت شي مب صوت: رسالة واضحة بكود معروف، وما يرجع للمحرك', async () => {
   const cases = [
-    [() => new Response('<html>building</html>', { status: 503 }), 503, 'piper_down'],
+    [() => new Response('<html>timeout</html>', { status: 504 }), 503, 'piper_down'],
     [() => { throw new TypeError('fetch failed'); }, 503, 'piper_down'],
+    [() => new Response('{"error":"model"}', { status: 502 }), 502, 'piper_model'],
+    [() => new Response('{"error":"key"}', { status: 401 }), 502, 'piper_key'],
     [() => new Response('nope', { status: 500 }), 502, 'piper_failed'],
     [() => new Response('<html>ok</html>', { status: 200 }), 502, 'piper_failed'],
   ];
-  for (const [space, status, code] of cases) {
-    await withSite({}, site(space), async (call, calls, engineCalls) => {
+  for (const [fn, status, code] of cases) {
+    await withSite({}, site(fn), async (call, calls, engineCalls) => {
       const r = await call({ text: 'هلا', lang: 'ar', voice: { donor: 'v4' } });
       assert.strictEqual(r.code, status, code);
       assert.strictEqual(r.body.code, code);
@@ -152,25 +139,51 @@ test('الـSpace نايم أو طايح أو رجّع شي مب صوت: رسا�
   }
 });
 
-test('سيرفر الـSpace (space/) مبني من ملفّاته: Docker على المنفذ 7860 وبدون مفتاح مكتوب', () => {
-  const read = (f) => fs.readFileSync(path.join(ROOT, 'space', f), 'utf8');
-  assert.match(read('README.md'), /sdk: docker[\s\S]*app_port: 7860/);
-  assert.match(read('app.py'), /dependencies=\[Depends\(check_key\)\]\)\ndef tts/, 'كل طلب صوت يحتاج المفتاح');
-  assert.match(read('Dockerfile'), /--port", "7860"/);
-  const app = read('app.py');
-  for (const name of ['ar_AE-omran_m_fusha-medium.onnx', 'ar_AE-omran_f_fusha-medium.onnx']) assert.ok(app.includes(name), name);
-  assert.ok(!/hf_[A-Za-z0-9]{20,}/.test(app + read('Dockerfile')), 'لا مفتاح في الملفات');
-});
-
-test('نوتبوك نشر الـSpace مبني من space/ وكوده سليم (python3 tools/build-space-notebook.py)', () => {
-  const { python } = require('./_pc-fake.cjs');
+test('api/piper.py: نفس المفتاح، يرفض بدونه، ويرجّع WAV بصوت موجود (بصوت وهمي بدل Piper)', () => {
   const py = python();
   assert.ok(py, 'يحتاج Python 3');
-  const cp = require('child_process');
-  const r = cp.spawnSync(py, [path.join(ROOT, 'tools', 'build-space-notebook.py'), '--check'], { encoding: 'utf8' });
-  assert.strictEqual(r.status, 0, 'run: python3 tools/build-space-notebook.py');
-  const nb = JSON.parse(fs.readFileSync(path.join(ROOT, 'space', 'omran-voices-tts-setup.ipynb'), 'utf8'));
-  const app = nb.cells.map((c) => c.source.join('')).find((s) => s.startsWith('%%writefile space/app.py\n'));
-  // %%writefile writes the cell as it is: same code, without the file's last newline
-  assert.strictEqual(app.split('\n').slice(1).join('\n').trimEnd(), fs.readFileSync(path.join(ROOT, 'space', 'app.py'), 'utf8').trimEnd());
+  // the real handler on a local port; voice_for is replaced so the test needs neither Piper nor the models
+  const code = `
+import importlib.util, json, os, sys, threading, urllib.request, urllib.error
+from http.server import ThreadingHTTPServer
+spec = importlib.util.spec_from_file_location('piper_fn', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class Fake:
+    def synthesize_wav(self, text, w):
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050); w.writeframes(b'\\0\\0' * len(text))
+asked = []
+m.voice_for = lambda spk, token: (asked.append(spk), Fake())[1]
+srv = ThreadingHTTPServer(('127.0.0.1', 0), m.handler); threading.Thread(target=srv.serve_forever, daemon=True).start()
+def post(body, key, raw=None):
+    data = raw if raw is not None else json.dumps(body).encode()
+    req = urllib.request.Request('http://127.0.0.1:%d/api/piper' % srv.server_address[1], data=data, method='POST', headers={'X-Piper-Key': key, 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req) as r: return [r.status, r.headers['Content-Type'], r.read()[:4].decode('latin1')]
+    except urllib.error.HTTPError as e: return [e.code, e.headers['Content-Type'], e.read().decode()]
+key = m.site_key(m.hf_token())
+out = {'key': key, 'noToken': m.site_key(''), 'ok': post({'text': ' مرحبا   بك ', 'voice': 'f'}, key), 'wrong': post({'text': 'x', 'voice': 'm'}, 'x' * 64),
+       'voice': post({'text': 'x', 'voice': 'v5'}, key), 'long': post({'text': 'ب' * 1201, 'voice': 'm'}, key), 'json': post(None, key, b'{nope'), 'asked': asked}
+print(json.dumps(out))
+srv.shutdown()`;
+  const r = cp.spawnSync(py, ['-c', code, path.join(ROOT, 'api', 'piper.py')], { encoding: 'utf8', env: { ...process.env, HF_TOKEN: '‏' + TOKEN + '\n' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim().split('\n').pop());
+  assert.strictEqual(out.key, KEY, 'نفس الحساب في الطرفين (وبعد تنظيف العلامات الخفيّة)');
+  assert.strictEqual(out.noToken, '', 'بدون توكن ما في مفتاح: الدالّة ترفض الكل');
+  assert.deepStrictEqual(out.ok, [200, 'audio/wav', 'RIFF']);
+  assert.strictEqual(out.wrong[0], 401);
+  assert.strictEqual(out.voice[0], 404);
+  assert.strictEqual(out.long[0], 400);
+  assert.strictEqual(out.json[0], 400);
+  assert.deepStrictEqual(out.asked, ['f'], 'الموديل ما ينقرا إلا لطلب سليم بالمفتاح');
+});
+
+test('Vercel يبني الدالّة: Piper مثبّت بنسخته، مهلتها، والموديلين بأسمائهم بدون أي سرّ مكتوب', () => {
+  const req = fs.readFileSync(path.join(ROOT, 'requirements.txt'), 'utf8');
+  assert.match(req, /^piper-tts==1\.8\.0$/m);
+  assert.match(req, /^huggingface_hub==/m);
+  const conf = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
+  assert.ok(conf.functions['api/piper.py'].maxDuration >= 60);
+  const src = fs.readFileSync(path.join(ROOT, 'api', 'piper.py'), 'utf8');
+  for (const name of ['ar_AE-omran_m_fusha-medium.onnx', 'ar_AE-omran_f_fusha-medium.onnx', 'omran77/omran-voices-piper']) assert.ok(src.includes(name), name);
+  assert.ok(!/hf_[A-Za-z0-9]{20,}/.test(src), 'لا توكن في الملف');
 });

@@ -48,12 +48,12 @@ module.exports = async (req, res) => {
       exaggeration: b.exaggeration, temperature: b.temperature, cfg: b.cfg, seed: b.seed,
     };
     let out;
-    // A trained light voice once its server is set up (until then, and for anything else: the engine):
-    // the text as written (Piper adds its own diacritics), the donor's consent checked like every donor.
+    // A trained light voice (api/piper.py on this same site; anything else: the engine): the text as
+    // written (Piper adds its own diacritics), the donor's consent checked like every donor.
     const speaker = v.donor ? piper.speakerFor(v.donor, lang) : null;
-    if (speaker && (await piper.settings())) {
+    if (speaker && piper.ready()) {
       if (!(await voices.list()).some((d) => d.id === String(v.donor))) throw new voices.VoicesError('الصوت مو موجود.', 404, 'unknown_voice');
-      out = { audio: await piper.generate({ text: b.text, speaker }) };
+      out = { audio: await piper.generate({ text: b.text, speaker, host: req.headers && req.headers.host }) };
     } else if (v.donor) out = await generateWithDonor(String(v.donor), args);
     else if (v.wavBase64) {
       const wav = Buffer.from(String(v.wavBase64), 'base64');

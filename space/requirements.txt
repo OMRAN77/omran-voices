@@ -1,4 +1,0 @@
-piper-tts==1.8.0
-fastapi==0.115.12
-uvicorn==0.34.2
-huggingface_hub>=0.30,<1

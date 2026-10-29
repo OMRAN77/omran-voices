@@ -5,6 +5,9 @@
     },
     "api/record.js": {
       "maxDuration": 60
+    },
+    "api/piper.py": {
+      "maxDuration": 120
     }
   },
   "headers": [
