@@ -187,7 +187,9 @@ const markLocal = (url, status) => {
   if (status !== 'up') link.at = 0; // the PC may have registered a new address since
 };
 
-/** 'off' (not set) | 'bad' (set wrong) | 'up' | 'down' (PC off, engine closed, or never registered) | 'badkey' */
+/** 'off' (not set) | 'bad' (set wrong) | 'up' | 'down' (PC off, engine closed, or never registered) | 'badkey'
+ *  | 'cpu' (the PC answers but has no usable GPU: ~2 minutes for one sentence, longer than the
+ *  site waits, so the public demo is used; OV_ENGINE_ALLOW_CPU=1 in Vercel uses it anyway) */
 async function localStatus() {
   if (!engineKey()) return process.env.OV_ENGINE_KEY || process.env.OV_ENGINE_URL ? 'bad' : 'off';
   if (process.env.OV_ENGINE_URL && !cleanUrl(process.env.OV_ENGINE_URL)) return 'bad';
@@ -198,6 +200,10 @@ async function localStatus() {
   try {
     const r = await fetch(s.url + '/health', { headers: { 'X-Engine-Key': s.key }, signal: AbortSignal.timeout(4000) });
     status = r.ok ? 'up' : r.status === 401 ? 'badkey' : 'down';
+    if (status === 'up' && !process.env.OV_ENGINE_ALLOW_CPU) {
+      const j = await r.json().catch(() => ({}));
+      if (j.device === 'cpu') status = 'cpu';
+    }
   } catch { status = 'down'; }
   markLocal(s.url, status);
   return status;
