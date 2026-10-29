@@ -9,4 +9,5 @@ pinned: false
 ---
 
 The two light voices of omran-voices (Piper, formal Arabic): `POST /tts {"text", "voice": "m"|"f"}` → WAV.
-Private: requests need the owner's Hugging Face token. Source: `space/` in the omran-voices repository.
+Every call needs the owner's key (header `X-Space-Key`); the models live in a private repository.
+Source: `space/` in the omran-voices repository.

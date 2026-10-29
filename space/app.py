@@ -3,19 +3,22 @@
   POST /tts   {"text": "...", "voice": "m" | "f"}  ->  audio/wav (22 050 Hz mono)
   GET  /health                                     ->  {"voices": ["f", "m"], "model": {...}}
   POST /reload                                     ->  loads the newest models (after a training run)
+Each needs the header X-Space-Key: the Space's secret SPACE_KEY (without it every call is refused).
 
-The Space is private: Hugging Face only lets in requests that carry a token of the owner
-(Authorization: Bearer hf_...), so the service needs no key of its own. The models come from the
-private repo omran77/omran-voices-piper with the Space's secret HF_TOKEN (read access is enough).
+The Space itself is public (a private Space needs a paid account: 402 when the notebook made one),
+so this code is public and holds no secret. The models stay in the private repo
+omran77/omran-voices-piper, read with the Space's secret HF_TOKEN; the key is made by the setup
+notebook, which also gives it to the voices site through its private dataset.
 MODEL_DIR (a local folder with the same files) replaces the repo for local tests.
 """
+import hmac
 import io
 import os
 import threading
 import wave
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -50,7 +53,18 @@ def load():
         loaded.update(info)
 
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # nothing to browse on a public Space
+
+
+def check_key(x_space_key: str = Header(default='')):
+    key = os.environ.get('SPACE_KEY', '')
+    if not key or not hmac.compare_digest(x_space_key.encode(), key.encode()):
+        raise HTTPException(401, 'key')
+
+
+@app.get('/')
+def root():  # Hugging Face's own check that the app is up: says nothing else
+    return {'ok': True}
 
 
 @app.on_event('startup')
@@ -63,7 +77,7 @@ class Speak(BaseModel):
     voice: str
 
 
-@app.post('/tts')
+@app.post('/tts', dependencies=[Depends(check_key)])
 def tts(req: Speak):
     text = ' '.join(req.text.split())
     if not text:
@@ -80,13 +94,13 @@ def tts(req: Speak):
     return Response(buf.getvalue(), media_type='audio/wav', headers={'Cache-Control': 'no-store'})
 
 
-@app.get('/health')
+@app.get('/health', dependencies=[Depends(check_key)])
 def health():
     with lock:
         return {'voices': sorted(voices), 'model': dict(loaded)}
 
 
-@app.post('/reload')
+@app.post('/reload', dependencies=[Depends(check_key)])
 def reload():
     # newest files from the repo (hf_hub_download fetches a file again when the repo has a newer one)
     load()
