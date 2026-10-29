@@ -7,6 +7,7 @@ const checkAccess = require('./_auth');
 const engine = require('./_engine');
 const dialect = require('./_dialect');
 const voices = require('./_voices');
+const piper = require('./_piper');
 
 // The pronunciation dictionary (api/_dialect.js) rewrites Emirati words for the
 // engine only; the page keeps the user's own text. Diacritics add characters, so
@@ -47,7 +48,13 @@ module.exports = async (req, res) => {
       exaggeration: b.exaggeration, temperature: b.temperature, cfg: b.cfg, seed: b.seed,
     };
     let out;
-    if (v.donor) out = await generateWithDonor(String(v.donor), args);
+    const speaker = v.donor ? piper.speakerFor(v.donor, lang) : null;
+    if (speaker) {
+      // a trained light voice: the text as written (Piper adds its own diacritics), and the donor's
+      // consent checked like every donor voice
+      if (!(await voices.list()).some((d) => d.id === String(v.donor))) throw new voices.VoicesError('الصوت مو موجود.', 404, 'unknown_voice');
+      out = { audio: await piper.generate({ text: b.text, speaker }) };
+    } else if (v.donor) out = await generateWithDonor(String(v.donor), args);
     else if (v.wavBase64) {
       const wav = Buffer.from(String(v.wavBase64), 'base64');
       if (wav.length < 1000 || wav.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'ملف الصوت حجمه غلط.' });
@@ -63,7 +70,7 @@ module.exports = async (req, res) => {
     // For the owner's Vercel logs. Header values are masked: fetch errors can quote
     // them (the token or the password).
     console.error('tts failed:', e.name, e.code || '', String(e.message || '').replace(/Bearer\s+\S+|hf_\w+/g, '***').slice(0, 300));
-    const known = e instanceof engine.EngineError || e instanceof voices.VoicesError;
+    const known = e instanceof engine.EngineError || e instanceof voices.VoicesError || e instanceof piper.PiperError;
     return res.status(known ? e.status : 500).json({ error: known ? e.message : 'صار خطأ في الخادم.', code: known ? e.code : 'server' });
   }
 };
