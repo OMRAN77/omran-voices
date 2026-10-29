@@ -147,10 +147,13 @@ test('api/piper.py: نفس المفتاح، يرفض بدونه، ويرجّع W
 import importlib.util, json, os, sys, threading, urllib.request, urllib.error
 from http.server import ThreadingHTTPServer
 spec = importlib.util.spec_from_file_location('piper_fn', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class Chunk:
+    def __init__(self, n): self.audio_int16_bytes = b'xy' * n
 class Fake:
-    def synthesize_wav(self, text, w):
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050); w.writeframes(b'\\0\\0' * len(text))
+    class config: sample_rate = 22050
+    def synthesize(self, text): yield Chunk(len(text))
 asked = []
+m.catt = lambda: None
 m.voice_for = lambda spk, token: (asked.append(spk), Fake())[1]
 srv = ThreadingHTTPServer(('127.0.0.1', 0), m.handler); threading.Thread(target=srv.serve_forever, daemon=True).start()
 def post(body, key, raw=None):
@@ -177,6 +180,53 @@ srv.shutdown()`;
   assert.deepStrictEqual(out.asked, ['f'], 'الموديل ما ينقرا إلا لطلب سليم بالمفتاح');
 });
 
+test('api/piper.py: CATT يشكّل الحروف العربيّة وحدها في مكانها، وبين الجمل سكتة، ولو ما انقرا CATT يكمل Piper بروحه', () => {
+  const py = python();
+  assert.ok(py, 'يحتاج Python 3');
+  const code = `
+import importlib.util, io, json, os, sys, tempfile, wave, zipfile
+spec = importlib.util.spec_from_file_location('piper_fn', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+c = object.__new__(m.Catt)
+seen = []
+def tags(words):  # fatha on every letter, shadda+damma on the last one: shows where each mark lands
+    seen.append(words)
+    return ['a'] * (len(words) - 1) + ['<SD>']
+c.tags = tags
+out = {'vowelled': c('قالَ: 3 كتب، جديدة! نعم'), 'seen': seen}
+class Chunk:
+    def __init__(self, n): self.audio_int16_bytes = b'xy' * n
+class Voice:
+    class config: sample_rate = 1000
+    def synthesize(self, text):
+        out['spoken'] = text
+        yield Chunk(100); yield Chunk(50)
+m.catt = lambda: (lambda t: '<' + t + '>')
+w = wave.open(io.BytesIO(m.speak(Voice(), 'جملة. جملة')))
+out['frames'], out['rate'] = w.getnframes(), w.getframerate()
+# the real loader: a download that is not the released file is refused, then not tried again for ten minutes
+spec.loader.exec_module(m)
+d = tempfile.mkdtemp(); bad = os.path.join(d, 'bad.zip')
+zipfile.ZipFile(bad, 'w').writestr('encoder.onnx', b'x')
+m.CATT_URL = 'file://' + bad
+os.environ['CATT_DIR'] = os.path.join(d, 'catt')
+out['first'] = m.catt() is None
+m.CATT_URL = 'file:///nowhere'
+out['again'] = m.catt() is None and m.catt_state['failed_at'] > 0
+out['files'] = os.path.exists(os.path.join(d, 'catt', 'encoder.onnx'))
+print(json.dumps(out, ensure_ascii=False))`;
+  const r = cp.spawnSync(py, ['-c', code, path.join(ROOT, 'api', 'piper.py')], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim().split('\n').pop());
+  const F = 'َ', SD = 'ُّ';
+  assert.deepStrictEqual(out.seen, ['قال كتب جديدة', ' نعم'.trim()], 'جملة جملة، والحركات القديمة والرموز والأرقام برّا');
+  assert.strictEqual(out.vowelled, 'ق' + F + 'ا' + F + 'ل' + F + ': 3 ك' + F + 'ت' + F + 'ب' + F + '، ج' + F + 'د' + F + 'ي' + F + 'د' + F + 'ة' + SD + '! ن' + F + 'ع' + F + 'م' + SD);
+  assert.strictEqual(out.spoken, '<جملة. جملة>', 'Piper يستلم النص المشكّل');
+  assert.strictEqual(out.rate, 1000);
+  assert.strictEqual(out.frames, 100 + 350 + 50, 'سكتة ٠٫٣٥ ث بين الجملتين، مب قبل الأولى');
+  assert.ok(out.first && out.again, 'ملف مب نفس المنشور ⇐ بدون CATT، وما يعيد كل طلب');
+  assert.strictEqual(out.files, false, 'وما ينفكّ');
+});
+
 test('Vercel يبني الدالّة: Piper مثبّت بنسخته، مهلتها، والموديلين بأسمائهم بدون أي سرّ مكتوب', () => {
   const req = fs.readFileSync(path.join(ROOT, 'requirements.txt'), 'utf8');
   assert.match(req, /^piper-tts==1\.8\.0$/m);
@@ -184,6 +234,7 @@ test('Vercel يبني الدالّة: Piper مثبّت بنسخته، مهلته
   const conf = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
   assert.ok(conf.functions['api/piper.py'].maxDuration >= 60);
   const src = fs.readFileSync(path.join(ROOT, 'api', 'piper.py'), 'utf8');
+  assert.match(src, /CATT_SHA256 = '[0-9a-f]{64}'/, 'نموذج التشكيل مثبّت ببصمته');
   for (const name of ['ar_AE-omran_m_fusha-medium.onnx', 'ar_AE-omran_f_fusha-medium.onnx', 'omran77/omran-voices-piper']) assert.ok(src.includes(name), name);
   assert.ok(!/hf_[A-Za-z0-9]{20,}/.test(src), 'لا توكن في الملف');
 });
