@@ -80,35 +80,6 @@ class Catt:
         return ''.join(self.sentence(p) for p in re.split(r'([.!?؟]+)', text))
 
 
-# The owner (8 Nov): «كأنه يقرأ قرآن… مش خليجي، كأنه مصري». CATT vowels every word ending (the case
-# endings of formal and Quranic reading: اليومَ، بيتُهُ، كتابٍ). Gulf speech stops on each word. So the
-# last letter of each Arabic word gets a sukun (waqf); -an before alif is read -aa; ة is read as h.
-# The vowels inside the word stay: those are what CATT fixed (الكتاب not الكتّاب).
-# Measured with Piper's phonemizer (8 Nov): a final shadda + sukun still reads «aldʒauːu» for الجوّ,
-# so the shadda goes (الجَوْ «aldʒau», حُرْ «ħur»); «ةْ» reads «-at», so it becomes «هْ» («qahwah»).
-WORD = re.compile('[' + ''.join(AR) + 'ً-ْٰ]+')
-SHADDA, SUKUN, FATHA, FATHATAN = 'ّ', 'ْ', 'َ', 'ً'
-
-
-def pausal_word(word):
-    letters = [i for i, c in enumerate(word) if c in AR]
-    if len(letters) < 2:  # و، ب، ل alone: nothing to stop on
-        return word
-    last = letters[-1]
-    head, tail = word[:last], word[last + 1:]
-    if word[last] in 'اى':  # long -aa, and -an written ًا or اً read -aa: fatha before the alif
-        head, tail = head.replace(FATHATAN, ''), tail.replace(FATHATAN, '')
-        before = head[len(head.rstrip('ًٌٍَُِّْ')):]  # the marks on the letter before (CATT writes fatha then shadda)
-        if not any(c in before for c in 'َُِ'):  # no vowel yet
-            head += FATHA
-        return head + word[last] + tail
-    return head + ('ه' if word[last] == 'ة' else word[last]) + SUKUN
-
-
-def pausal(text):
-    return WORD.sub(lambda m: pausal_word(m.group(0)), text)
-
-
 catt_state = {'model': None, 'failed_at': 0.0}
 
 
@@ -166,8 +137,6 @@ def speak(voice, text):
     vowel = catt()
     if vowel:
         text = vowel(text)
-        if os.environ.get('OV_PIPER_PAUSAL', '1') != '0':
-            text = pausal(text)
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as w:
         w.setframerate(voice.config.sample_rate)
