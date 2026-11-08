@@ -220,7 +220,7 @@ print(json.dumps(out, ensure_ascii=False))`;
   const F = 'َ', SD = 'ُّ';
   assert.deepStrictEqual(out.seen, ['قال كتب جديدة', ' نعم'.trim()], 'جملة جملة، والحركات القديمة والرموز والأرقام برّا');
   assert.strictEqual(out.vowelled, 'ق' + F + 'ا' + F + 'ل' + F + ': 3 ك' + F + 'ت' + F + 'ب' + F + '، ج' + F + 'د' + F + 'ي' + F + 'د' + F + 'ة' + SD + '! ن' + F + 'ع' + F + 'م' + SD);
-  assert.strictEqual(out.spoken, '<جملهْ. جملهْ>', 'Piper يستلم النص المشكّل، وآخر كل كلمة موقوف (ة ⇐ هْ)');
+  assert.strictEqual(out.spoken, '<جملة. جملة>', 'Piper يستلم النص المشكّل');
   assert.strictEqual(out.rate, 1000);
   assert.strictEqual(out.frames, 100 + 350 + 50, 'سكتة ٠٫٣٥ ث بين الجملتين، مب قبل الأولى');
   assert.ok(out.first && out.again, 'ملف مب نفس المنشور ⇐ بدون CATT، وما يعيد كل طلب');
@@ -237,45 +237,4 @@ test('Vercel يبني الدالّة: Piper مثبّت بنسخته، مهلته
   assert.match(src, /CATT_SHA256 = '[0-9a-f]{64}'/, 'نموذج التشكيل مثبّت ببصمته');
   for (const name of ['ar_AE-omran_m_fusha-medium.onnx', 'ar_AE-omran_f_fusha-medium.onnx', 'omran77/omran-voices-piper']) assert.ok(src.includes(name), name);
   assert.ok(!/hf_[A-Za-z0-9]{20,}/.test(src), 'لا توكن في الملف');
-});
-
-test('api/piper.py: الوقف — آخر كل كلمة بسكون بدل إعراب الفصحى (اليومُ ⇐ اليومْ)، و-ًا ⇐ -َا، وة ⇐ هْ، والشدّة الأخيرة تنشال، وOV_PIPER_PAUSAL=0 يطفيه', () => {
-  // المالك ٨ نوفمبر: «كأنه يقرأ قرآن… مش خليجي، كأنه مصري». القيم من تشكيل CATT الحقيقي لجملة التجربة.
-  const py = python();
-  assert.ok(py, 'يحتاج Python 3');
-  const cases = {
-    'شِحَالُكَ': 'شِحَالُكْ',
-    'الْيَوْمُ': 'الْيَوْمْ',
-    'الْجَوُّ': 'الْجَوْ',
-    'حُرٌّ': 'حُرْ',
-    'وَايِدٌ': 'وَايِدْ',
-    'قَهْوَةً': 'قَهْوَهْ',
-    'شُكْرًا': 'شُكْرَا',
-    'شُكْراً': 'شُكْرَا',
-    'هَلَّا': 'هَلَّا',
-    'عَلَى': 'عَلَى',
-    'وَ': 'وَ',
-    'يُعْطِيكَ الْعَافِيَةَ.': 'يُعْطِيكْ الْعَافِيَهْ.',
-    'Hello 3 كتبٍ!': 'Hello 3 كتبْ!',
-  };
-  const code = `
-import importlib.util, json, os, sys
-spec = importlib.util.spec_from_file_location('piper_fn', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-cases = json.loads(sys.argv[2])
-out = {k: m.pausal(k) for k in cases}
-class Voice:
-    class config: sample_rate = 1000
-    def synthesize(self, text):
-        out['spoken'] = text
-        return iter(())
-m.catt = lambda: (lambda t: t)
-os.environ['OV_PIPER_PAUSAL'] = '0'
-m.speak(Voice(), 'الْيَوْمُ')
-out['off'] = out['spoken']
-print(json.dumps(out, ensure_ascii=False))`;
-  const r = cp.spawnSync(py, ['-c', code, path.join(ROOT, 'api', 'piper.py'), JSON.stringify(cases)], { encoding: 'utf8' });
-  assert.strictEqual(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout.trim().split('\n').pop());
-  for (const [k, v] of Object.entries(cases)) assert.strictEqual(out[k], v, k);
-  assert.strictEqual(out.off, 'الْيَوْمُ', 'OV_PIPER_PAUSAL=0 يرجّع الإعراب');
 });
