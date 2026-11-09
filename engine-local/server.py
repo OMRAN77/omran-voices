@@ -151,12 +151,7 @@ class Handler(BaseHTTPRequestHandler):
         pass  # one line per job is printed below; no request details
 
     def send_json(self, status, obj):
-        data = json.dumps(obj, ensure_ascii=False).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        self.send_body(status, 'application/json; charset=utf-8', json.dumps(obj, ensure_ascii=False).encode('utf-8'))
 
     def authorized(self):
         given = self.headers.get('X-Engine-Key', '').encode('utf-8', 'replace')
@@ -171,6 +166,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return
         self.send_json(200, {'ok': True, 'device': self.server.engine.name, 'busy': self.server.lock.locked()})
+
+    def send_body(self, status, ctype, data):
+        self.send_response(status)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         if self.path != '/tts':
@@ -227,13 +229,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             print('job failed:', type(e).__name__, str(e)[:200])
             return self.send_json(500, {'error': type(e).__name__ + ': ' + str(e)[:200], 'code': 'engine'})
-        data = wav_bytes(pcm, sr)
         print(time.strftime('%H:%M:%S'), lang, len(text), 'chars ->', round(len(pcm) / 2 / sr, 1), 's audio in', round(time.time() - t0, 1), 's')
-        self.send_response(200)
-        self.send_header('Content-Type', 'audio/wav')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_body(200, 'audio/wav', wav_bytes(pcm, sr))
+        except ConnectionError:
+            print('The site stopped waiting before the voice was ready (too slow).')
 
 
 def make_server(engine, key, port=PORT, ref_dir=REF_DIR, host='127.0.0.1'):
@@ -343,6 +343,10 @@ def main():
     print('Voice engine ready on http://127.0.0.1:%d  (%s)' % (PORT, engine.name))
     print('Key for Vercel (OV_ENGINE_KEY) is in: %s' % KEY_FILE)
     print('Keep this window open. Close it to stop the engine.')
+    if engine.name == 'cpu':
+        print()
+        print('No usable GPU: about 2 minutes per sentence, longer than the site waits.')
+        print('The site keeps using the public engine while this PC has no GPU.')
     if '--no-tunnel' not in sys.argv:
         threading.Thread(target=run_tunnel, args=(key, srv.server_address[1]), daemon=True).start()
     try:

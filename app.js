@@ -175,6 +175,7 @@ async function tryUnlock(key) {
       up: ['المحرك شغّال على جهازك ✓', 'ok'],
       down: ['جهازك مطفي أو نافذة المحرك مسكّرة، فالأصوات تطلع من المحرك العام (حدّه صغير).', 'bad'],
       badkey: ['مفتاح المحرك OV_ENGINE_KEY في Vercel غير اللي في جهازك (engine-key.txt).', 'bad'],
+      cpu: ['جهازك شغّال بس بدون كرت شاشة يقدر عليه المحرك (بطيء وايد)، فالأصوات تطلع من المحرك العام.', 'bad'],
       bad: ['OV_ENGINE_URL أو OV_ENGINE_KEY في Vercel مكتوب غلط.', 'bad'],
     }[j.engine];
     if (state.donorErr) setMsg('genMsg', 'ما قدرت أجيب أصوات المتبرعين: ' + state.donorErr, 'bad');

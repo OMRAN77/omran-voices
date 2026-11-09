@@ -144,3 +144,23 @@ test('/api/check يرجّع حالة الجهاز', () =>
       if (old === undefined) delete process.env.VOICES_ACCESS_KEY; else process.env.VOICES_ACCESS_KEY = old;
     }
   }));
+
+test('جهاز بدون كرت (device: cpu): الموقع ما يستخدمه ويرجع للعام، إلا لو OV_ENGINE_ALLOW_CPU', async () => {
+  const cpuPc = async (url, opts) => {
+    if (url === PC + '/health') return json(200, { ok: true, device: 'cpu' });
+    throw new Error('the slow PC must not get a job');
+  };
+  await withEngine(ON, cpuPc, async (e, calls) => {
+    assert.strictEqual(await e.localStatus(), 'cpu');
+    await assert.rejects(e.generate({ text: 'هلا', lang: 'ar', voice: { wav: WAV } }), spaceErr);
+    assert.ok(toSpace(calls).length > 0);
+    assert.strictEqual(toPc(calls).filter((c) => c.url.endsWith('/tts')).length, 0);
+  });
+  process.env.OV_ENGINE_ALLOW_CPU = '1';
+  try {
+    await withEngine(ON, async (url, opts) => (url.endsWith('/health') ? json(200, { ok: true, device: 'cpu' }) : new Response(Buffer.from('RIFFwav'), { status: 200 })), async (e) => {
+      assert.strictEqual(await e.localStatus(), 'up');
+      assert.strictEqual((await e.generate({ text: 'هلا', lang: 'ar', voice: { wav: WAV } })).audio.toString(), 'RIFFwav');
+    });
+  } finally { delete process.env.OV_ENGINE_ALLOW_CPU; }
+});
