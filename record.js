@@ -1,9 +1,15 @@
-// The recording page. Shows one sentence at a time, records it, trims/resamples it into a 24 kHz WAV
-// (record-lib.js), keeps it in IndexedDB until /api/record has taken it, and shows the minutes counter.
+// The recording page. Two ways to record, both ending as 24 kHz WAVs (record-lib.js) kept in IndexedDB
+// until /api/record has taken them, with the minutes counter:
+//  - «تسجيل متواصل» (the default): one press, the person reads down a list of sentences or just talks,
+//    up to 30 minutes; the take is cut into pieces of under a minute that upload by themselves.
+//    The owner (21 Nov): «اذا تريد 30 دقيقة ليش ماتخليها مره وحده… هذا عذاب يعني اسكت وارفع ويتكلم».
+//  - «جملة جملة»: one sentence at a time, heard and confirmed before it is kept.
 (function () {
   'use strict';
   const L = window.OVRec;
   const $ = (id) => document.getElementById(id);
+  const PAGE = 12;                    // sentences on screen in a continuous take
+  const FREE_IDLE = 'اضغط الميكروفون وتكلّم لين ٣٠ دقيقة. لما تخلص اضغطه مرة ثانية.';
   const MAX_SEC = 60;                 // the owner (21 Nov): «يوقف على 25 ثانيه، سوها على الاقل دقيقة». 60 s = 2.88 MB WAV, sent alone (3.84 MB as JSON, under Vercel's 4.5 MB)
   const IDLE_CLOSE_MS = 60 * 1000;    // the microphone is released a minute after the last take
 
@@ -35,6 +41,8 @@
     pend: new Map(),                  // rid -> { speaker, dur } for everything waiting to upload
     flushing: false, again: false, flushTimer: 0, backoff: 0, nextTry: 0, maxItems: 8, keyBad: false,
     stats: null, statsErr: '', shown: { mine: 0, total: 0 }, synced: false,
+    mode: 'free',                     // free (one continuous take) | one (sentence by sentence)
+    wake: null, worker: null, jobs: new Map(), jobId: 0,
   };
   const posKey = () => 'ov_rec_pos:' + L.nameKey(S.name) + (S.dialect ? ':' + S.dialect : '');
 
@@ -117,10 +125,45 @@
     $('edited').hidden = !ed; $('revert').hidden = !ed;
     autosize();
   }
+  // The sentences on screen in a continuous take: the person reads down the list without stopping.
+  const pageRows = () => S.order.slice(S.pos, S.pos + PAGE).map((i) => S.items[i]);
+  function renderPage() {
+    const box = $('readList');
+    box.textContent = '';
+    for (const s of pageRows()) {
+      const p = document.createElement('p');
+      p.textContent = s[1];
+      box.appendChild(p);
+      if (S.rec && S.rec.free) S.rec.prompt.add(s[0]);
+    }
+    box.scrollTop = 0;
+  }
+  function morePage() {
+    if (!S.items) return;
+    S.pos = S.pos + PAGE < S.order.length ? S.pos + PAGE : 0;
+    store.set(posKey(), String(S.pos));
+    renderPage();
+  }
+  function setMode(mode) {
+    if (S.state !== 'idle' || (mode !== 'free' && mode !== 'one')) return;
+    S.mode = mode;
+    store.set('ov_rec_mode', mode);
+    showSentence();
+  }
   function showSentence() {
     const done = S.pos >= S.order.length;
     $('doneCard').hidden = !done; $('sentenceCard').hidden = done; $('stageCard').hidden = done;
     if (done) return;
+    const free = S.mode === 'free';
+    $('oneBox').hidden = free; $('freeBox').hidden = !free;
+    $('modeFree').classList.toggle('on', free); $('modeOne').classList.toggle('on', !free);
+    $('keys').textContent = free ? 'المسافة: سجّل / وقّف' : 'المسافة: سجّل / وقّف · Enter: التالي · R: عيد · S: تخطّى';
+    if (free) {
+      renderPage();
+      setState('idle');
+      status(FREE_IDLE);
+      return;
+    }
     const s = cur();
     $('text').value = s[1];
     $('pos').textContent = 'جملة ' + (S.pos + 1);
@@ -148,6 +191,8 @@
     $('mic').disabled = st === 'busy' || st === 'opening';
     $('mic').setAttribute('aria-label', st === 'rec' ? 'وقّف' : 'سجّل');
     $('skip').disabled = st === 'busy' || st === 'saving';
+    $('skip').hidden = S.mode === 'free';
+    $('modeFree').disabled = $('modeOne').disabled = st !== 'idle';
     $('next').disabled = st === 'saving';
     $('redo').disabled = st === 'saving';
     if (st !== 'rec') $('timer').textContent = '0:00';
@@ -167,6 +212,12 @@
     let p = 0;
     for (let i = 0; i < f32.length; i++) { const a = Math.abs(f32[i]); if (a > p) p = a; }
     if (p > S.peak) S.peak = p;
+    if (r.free) {
+      r.total += f32.length;
+      if (L.cutNow(r.n / S.mic.rate, p)) cutPiece(r, false);
+      if (r.total / S.mic.rate >= L.FREE_MAX_SEC) stop();
+      return;
+    }
     if (r.n / S.mic.rate >= MAX_SEC) { status('وصلت ' + MAX_SEC + ' ثانية، وقّفت لك.', 'warn'); stop(); }
   }
   async function openMic() {
@@ -226,17 +277,89 @@
     else $('mic').style.setProperty('--lvl', '0');
   }
   async function start() {
-    if (S.state !== 'idle' || !L.cleanText($('text').value)) return;
+    const free = S.mode === 'free';
+    if (S.state !== 'idle' || (!free && !L.cleanText($('text').value))) return;
     setState('opening');
     status('جاري تشغيل الميكروفون…');
     try { await openMic(); } catch (e) { setState('idle'); status(micMessage(e), 'bad'); return; }
     clearTimeout(S.closeTimer);
-    S.rec = { chunks: [], n: 0, t0: performance.now() };
+    // free: total = samples of the whole take, n = samples of the piece being filled
+    S.rec = { chunks: [], n: 0, t0: performance.now(), free, total: 0, session: L.newId(), part: 0, prompt: new Set(), busy: 0, kept: 0, ended: false,
+      speaker: S.name, dialect: S.dialect || '' };
+    if (free) { pageRows().forEach((s) => S.rec.prompt.add(s[0])); wakeOn(); }
     S.peak = 0;
     setState('rec');
-    status('تكلّم… وإذا خلصت اضغط مرة ثانية');
-    S.tick = setInterval(() => { $('timer').textContent = clock((performance.now() - S.rec.t0) / 1000); }, 200);
+    status(free ? 'يسجّل… كمّل كلامك وما عليك من شي، الرفع بروحه. لما تخلص اضغط مرة ثانية.' : 'تكلّم… وإذا خلصت اضغط مرة ثانية');
+    S.tick = setInterval(() => {
+      const r = S.rec;
+      if (r) $('timer').textContent = clock(r.free ? r.total / S.mic.rate : (performance.now() - r.t0) / 1000);
+    }, 200);
     S.raf = requestAnimationFrame(meterLoop);
+  }
+
+  /* ---------- a continuous take ---------- */
+  // The phone's screen must stay on: a locked phone stops the microphone.
+  async function wakeOn() {
+    try { if (navigator.wakeLock) S.wake = await navigator.wakeLock.request('screen'); }
+    catch (e) { S.wake = null; /* refused or unsupported: recording still works while the screen is on */ }
+  }
+  function wakeOff() {
+    try { if (S.wake) S.wake.release(); } catch (e) { /* already released */ }
+    S.wake = null;
+  }
+  // WAV encoding of a piece (resampling a minute of sound) off the main thread, so the recording
+  // that goes on meanwhile never stutters; on the main thread where a worker cannot start.
+  function encode(chunks, rate) {
+    return new Promise((res) => {
+      const local = () => setTimeout(() => res(L.makeWav(chunks, rate)), 0);
+      if (S.worker === false || !window.Worker) { local(); return; }
+      try {
+        if (!S.worker) {
+          const src = "importScripts('" + location.origin + "/record-lib.js');onmessage=function(e){var t=OVRec.makeWav(e.data.chunks,e.data.rate);" +
+            'postMessage({id:e.data.id,wav:t.wav,seconds:t.seconds,verdict:t.verdict},[t.wav.buffer])}';
+          S.worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+          S.worker.onmessage = (e) => { const job = S.jobs.get(e.data.id); S.jobs.delete(e.data.id); if (job) job.res(e.data); };
+          S.worker.onerror = () => { // the worker could not load: every waiting piece is encoded here instead
+            S.worker = false;
+            const waiting = [...S.jobs.values()];
+            S.jobs.clear();
+            waiting.forEach((job) => job.local());
+          };
+        }
+        const id = ++S.jobId;
+        S.jobs.set(id, { res, local });
+        S.worker.postMessage({ id, chunks, rate });
+      } catch (e) { S.worker = false; local(); /* same fallback */ }
+    });
+  }
+  function freeDone(r) {
+    if (S.rec || S.state !== 'idle') return; // another take has started
+    if (r.kept > 0) status('تم ✓ سجّلت ' + L.fmtTime(r.kept) + '. خلّ الصفحة مفتوحة لين يختفي «بانتظار الرفع».', 'ok');
+    else status('ما سمعت صوت. تأكّد من الميكروفون وجرّب مرة ثانية.', 'bad');
+  }
+  // Takes what was recorded since the last cut, and queues it for upload as one piece of the take.
+  function cutPiece(r, last) {
+    const rate = S.mic.rate;
+    const chunks = r.chunks, n = r.n, part = r.part, prompt = [...r.prompt].slice(0, 60), ts = Date.now();
+    r.chunks = []; r.n = 0;
+    r.prompt = new Set(pageRows().map((s) => s[0]));
+    if (last) r.ended = true;
+    if (n / rate < 1) { if (r.ended && !r.busy) freeDone(r); return; }
+    r.part++;
+    r.busy++;
+    encode(chunks, rate).then(async (t) => {
+      if (!t.verdict.block) { // a silent piece (the person stepped away) is dropped, not reported
+        const it = { rid: L.newId(), speaker: r.speaker, sid: -1, text: '', original: '', reg: '', topic: '', dialect: r.dialect, ts,
+          free: true, session: r.session, part, prompt, dur: t.seconds, size: t.wav.length, wav: t.wav };
+        await Q.put(it);
+        S.pend.set(it.rid, { speaker: it.speaker, dur: it.dur });
+        r.kept += t.seconds;
+        renderStats(); renderPending();
+        flush();
+      }
+      r.busy--;
+      if (r.ended && !r.busy) freeDone(r);
+    });
   }
   function release() {
     clearInterval(S.tick);
@@ -250,6 +373,13 @@
     if (!r || S.state !== 'rec') return;
     S.rec = null;
     release();
+    if (r.free) { // no listening back, no confirming: the pieces are already on their way
+      wakeOff();
+      setState('idle');
+      status('جاري حفظ آخر جزء…');
+      cutPiece(r, true);
+      return;
+    }
     setState('busy');
     const rate = S.mic.rate;
     setTimeout(() => finish(r, rate), 30); // lets the screen repaint before the (short) heavy work
@@ -320,7 +450,8 @@
         const all = await Q.all();
         if (!all.length) break;
         const plan = L.batchPlan(all, S.maxItems);
-        const items = plan.map((it) => ({ rid: it.rid, sid: it.sid, text: it.text, original: it.original, reg: it.reg, topic: it.topic, ts: it.ts, wav: b64(it.wav) }));
+        const items = plan.map((it) => Object.assign({ rid: it.rid, sid: it.sid, text: it.text, original: it.original, reg: it.reg, topic: it.topic, ts: it.ts, wav: b64(it.wav) },
+          it.free ? { free: true, session: it.session, part: it.part, prompt: it.prompt, dialect: it.dialect } : null));
         let res;
         try { res = await api('POST', { speaker: plan[0].speaker, consent: true, items }); } catch (e) { retryLater(5); return; /* offline: it stays queued */ }
         const { r, j } = res;
@@ -435,7 +566,8 @@
   }
   function showSetup(msg) {
     dropTake();
-    if (S.rec) { S.rec = null; release(); }
+    if (S.state === 'rec' && S.rec && S.rec.free) stop(); // what was said so far is kept, under the name it was said with
+    else if (S.rec) { S.rec = null; release(); }
     $('app').hidden = true; $('setup').hidden = false;
     $('name').value = S.name;
     $('consent').checked = store.get('ov_rec_consent') === '1';
@@ -479,6 +611,10 @@
     $('go').onclick = go;
     $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     $('mic').onclick = () => (S.state === 'rec' ? stop() : start());
+    $('modeFree').onclick = () => setMode('free');
+    $('modeOne').onclick = () => setMode('one');
+    $('more').onclick = morePage;
+    S.mode = store.get('ov_rec_mode') === 'one' ? 'one' : 'free';
     $('redo').onclick = redo;
     $('next').onclick = next;
     $('skip').onclick = skip;
@@ -491,7 +627,14 @@
     window.addEventListener('pagehide', closeMic);
     window.addEventListener('beforeunload', (e) => { if (S.state === 'rec' || S.state === 'review') { e.preventDefault(); e.returnValue = ''; } });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { if (S.state !== 'rec') closeMic(); if (S.pend.size) flush(); } else loadStats();
+      if (document.hidden) { if (S.state !== 'rec') closeMic(); if (S.pend.size) flush(); return; }
+      loadStats();
+      // back to the page in the middle of a continuous take: the screen lock is asked for again
+      // (the browser dropped it), and the microphone is woken if the browser put it to sleep
+      if (S.state === 'rec' && S.rec && S.rec.free) {
+        wakeOn();
+        if (S.mic && S.mic.ctx.state === 'suspended') S.mic.ctx.resume().catch(() => { /* the next tap on the microphone resumes it */ });
+      }
     });
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey || $('app').hidden) return;

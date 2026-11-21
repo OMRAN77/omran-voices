@@ -45,6 +45,13 @@
   #text:focus { background: var(--card2); }
   #text:disabled { color: var(--text); -webkit-text-fill-color: var(--text); opacity: 1; }
   .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 4px; }
+  /* one continuous take: the two ways to record, and the list to read from */
+  .modes { display:flex; gap: 8px; margin-bottom: 14px; }
+  .modes button { flex: 1; min-width: 0; }
+  .modes .on { border-color: var(--gold); color: var(--gold2); font-weight: 700; }
+  .readlist { max-height: 44vh; overflow-y: auto; font-size: 21px; line-height: 1.9; text-align: center; }
+  .readlist p { margin: 0; padding: 8px 4px; border-bottom: 1px dashed var(--line); }
+  .readlist p:last-child { border-bottom: none; }
 
   /* the recorder */
   .stage { display:flex; flex-direction: column; align-items:center; gap: 10px; padding: 8px 0 4px; }
@@ -93,7 +100,7 @@
 <div class="wrap">
   <header>
     <img src="/icon.svg" alt="">
-    <div><h1>تسجيل الأصوات</h1><small>لهجتنا الإماراتية، جملة جملة</small></div>
+    <div><h1>تسجيل الأصوات</h1><small>لهجتنا الإماراتية</small></div>
   </header>
 
   <section id="checkCard" class="card" hidden>
@@ -118,7 +125,17 @@
   </section>
 
   <main id="app" hidden>
+    <div class="modes">
+      <button id="modeFree" type="button" class="on">تسجيل متواصل</button>
+      <button id="modeOne" type="button">جملة جملة</button>
+    </div>
     <section class="card" id="sentenceCard">
+     <div id="freeBox" hidden>
+      <div class="hint" style="margin:0 0 8px">اقرا من هالجمل ورا بعض، أو تكلّم بكلامك. ما تحتاج توقف ولا ترفع.</div>
+      <div id="readList" class="readlist" lang="ar"></div>
+      <div class="under"><button id="more" type="button">جمل ثانية ↻</button></div>
+     </div>
+     <div id="oneBox">
       <div class="meta">
         <span id="pos" class="tag"></span>
         <span id="topic" class="tag" hidden></span>
@@ -128,6 +145,7 @@
       </div>
       <textarea id="text" rows="2" aria-label="الجملة" spellcheck="false" lang="ar"></textarea>
       <div class="hint" id="texthint">إذا الجملة فيها غلط اضغط عليها وعدّلها قبل لا تسجّل.</div>
+     </div>
     </section>
 
     <section class="card done" id="doneCard" hidden>
@@ -151,7 +169,7 @@
         </div>
       </div>
       <div class="under"><button id="skip" type="button">تخطّى</button></div>
-      <div class="hint keys">المسافة: سجّل / وقّف · Enter: التالي · R: عيد · S: تخطّى</div>
+      <div class="hint keys" id="keys">المسافة: سجّل / وقّف · Enter: التالي · R: عيد · S: تخطّى</div>
     </section>
 
     <section class="card" id="counter">
