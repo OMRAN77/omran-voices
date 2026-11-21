@@ -40,8 +40,8 @@ INTRO = '''
 **على Google Colab:** Runtime ← Change runtime type ← **T4 GPU**، وأيقونة المفتاح 🔑 يسار ← `HF_TOKEN` مع
 **Notebook access**، ثم Runtime ← **Run all** والصفحة مفتوحة.
 
-لما يخلص: انزل لآخر الصفحة وتلقى العيّنات تسمعها على طول. تشغيلة ثانية تكمل التدريب من آخر نسخة، وتاخذ أي
-تسجيلات جديدة انضافت.
+التشغيلة تاخذ تقريبًا ١٠ ساعات (التدريب ٩). لما يخلص: انزل لآخر الصفحة وتلقى العيّنات تسمعها على طول. تشغيلة
+ثانية تكمل التدريب من آخر نسخة، وتاخذ أي تسجيلات جديدة انضافت.
 '''
 
 CONFIG = '''
@@ -52,7 +52,8 @@ REC_REPO = 'omran77/omran-voices-recordings'
 MODEL_REPO = 'omran77/omran-voices-piper'
 SENTENCE_URLS = ['https://omran-voices.vercel.app/data/sentences.json', 'https://omran-voices.vercel.app/data/dialects.json']
 WHISPER = 'large-v3'                   # يفرّغ التسجيلات (التسجيل المتواصل ما له نص)
-TRAIN_HOURS = 2.5                      # وقت التدريب في هالتشغيلة؛ تشغيلة ثانية تكمل
+TRAIN_HOURS = 9.0                      # وقت التدريب في هالتشغيلة (كرت T4 يمشي ~٠٫٧ خطوة بالثانية: ٩ ساعات ≈ ٢٢ ألف خطوة)؛ تشغيلة ثانية تكمل
+ROUND = 2                              # يزيد لما تتغيّر طريقة تجهيز الصوت: التدريب يبدأ من جديد وما يكمل على نسخة تعلّمت من صوت مكتوم
 SESSION_HOURS = 11.5                   # أطول جلسة (Kaggle ١٢ ساعة)
 UPLOAD_EVERY_MIN = 30                  # نسخة وعيّنات كل نص ساعة
 VOICE_FILE = 'ar_AE-{}_gulf-medium'    # ar_AE-saif_gulf-medium.onnx
@@ -142,7 +143,8 @@ if not Path('envB/.ok').exists():
     # cmake 4 refuses older projects.
     run('rm -rf envB && uv venv envB --python 3.11 --seed -q')
     run(f'uv pip install -q --python {PY_B} {TORCH} {CU}')
-    run(f'uv pip install -q --python {PY_B} "piper-tts[train]==1.8.0" cython numpy "setuptools<81" huggingface_hub {TORCH}')
+    # Lightning is pinned: 2.6 changed when last.ckpt is written (train_main.py), and the next change should not find us on a 10-hour run.
+    run(f'uv pip install -q --python {PY_B} "piper-tts[train]==1.8.0" "lightning==2.6.6" cython numpy "setuptools<81" huggingface_hub {TORCH}')
     # The alignment step is a small Cython file the PyPI package leaves out: build it from Piper's source.
     if not Path('piper1-gpl').exists():
         run('git clone -q --depth 1 --branch v1.8.0 https://github.com/OHF-voice/piper1-gpl.git piper1-gpl'
@@ -200,8 +202,12 @@ api.upload_file(path_or_fileobj='words.json', path_in_repo=WORDS, repo_id=MODEL_
 
 shutil.rmtree('data', ignore_errors=True)
 run([PY_W, 'prep_real.py', 'cut', '--rec', REC, '--words', 'words.json', '--sentences', 'sentences.json', '--speaker', VOICE, '--out', 'data'])
+run([PY_W, 'prep_real.py', 'check', '--data', 'data', '--speaker', VOICE, '--model', WHISPER], env=gpu_env)
 report = json.loads(Path(f'data/{VOICE}.report.json').read_text(encoding='utf-8'))
-print(f"{report['clips']} clips, {report['seconds'] / 60:.1f} minutes, {report['matched']} with the screen's spelling")
+print(f"{report['clips']} clips, {report['seconds'] / 60:.1f} minutes, {report['matched']} with the screen's spelling, misheard and dropped: {report.get('misheard', 0)}")
+sound = report.get('sound', {})
+print('SOUND: the recording is', sound.get('muffled_db'), 'dB under clear speech at 1.5-4 kHz;',
+      f"repaired, now {sound.get('after_db')} dB" if sound.get('repaired') else 'clear enough, left as it is')
 assert report['seconds'] >= 5 * 60, 'أقل من ٥ دقايق كلام صالح للتدريب: سجّل أكثر'
 run([PY_B, 'prep_real.py', 'list', '--data', 'data', '--speaker', VOICE, '--out', f'data/{VOICE}.csv'])
 with tarfile.open('real-data.tar', 'w') as t:
@@ -213,7 +219,7 @@ TRAIN = '''
 # Step 2: the voice starts from the Arabic voice "kareem" with every layer in place (or continues
 # from its own last saved version), and moves toward the person's voice and way of speaking.
 NAME = VOICE_FILE.format(VOICE)
-CKPT = f'ckpt/{VOICE}_gulf.ckpt'
+CKPT = f'ckpt/{VOICE}_gulf_r{ROUND}.ckpt'
 left = min(TRAIN_HOURS, hours_left() - 0.6)  # export and upload need ~30 minutes
 assert left > 0.3, 'not enough time left in this session'
 hh, mm = int(left), int((left - int(left)) * 60)
@@ -239,18 +245,21 @@ train = subprocess.Popen(cmd, env=dict(os.environ, CUDA_VISIBLE_DEVICES='0'), st
 
 
 def export():
+    """The newest checkpoint -> the voice file and its samples. Returns where in training it is from, or ''."""
     cks = sorted(W.glob(f'runs/{VOICE}/lightning_logs/version_*/checkpoints/last.ckpt'), key=lambda p: p.stat().st_mtime)
     if not cks:
         print('no checkpoint yet')
-        return False
+        return ''
     shutil.copy(cks[-1], 'snap.ckpt')
     try:
+        at = out([PY_B, '-c', "import torch; c = torch.load('snap.ckpt', map_location='cpu', weights_only=False); "
+                              "print('epoch', c['epoch'], 'step', c['global_step'])"])
         run([PY_B, '-m', 'piper.train.export_onnx', '--checkpoint', 'snap.ckpt', '--output-file', f'out/{NAME}.onnx'], log=False)
         run([PY_B, 'samples_real.py', f'out/{NAME}.onnx', 'out/samples', f'{VOICE}_gulf'], log=False)
-    except RuntimeError as e:
+    except (RuntimeError, subprocess.CalledProcessError) as e:
         print('export failed this time:', e)
-        return False
-    return True
+        return ''
+    return at
 
 
 def upload(final=False):
@@ -262,7 +271,7 @@ def upload(final=False):
     api.upload_folder(folder_path='out', repo_id=MODEL_REPO, commit_message=f'{VOICE} voice' + (' (final)' if final else ''))
     if ok:
         api.upload_file(path_or_fileobj='snap.ckpt', path_in_repo=CKPT, repo_id=MODEL_REPO, commit_message='checkpoint ' + VOICE)
-    print(time.strftime('%H:%M'), 'uploaded to', MODEL_REPO, '(model and samples)' if ok else '(logs only)')
+    print(time.strftime('%H:%M'), 'uploaded to', MODEL_REPO, f'(model and samples from {ok})' if ok else '(logs only)')
     return ok
 
 

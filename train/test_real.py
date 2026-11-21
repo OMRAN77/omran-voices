@@ -159,6 +159,133 @@ class FilesTest(unittest.TestCase):
             self.assertEqual(prep_real.build_list(data, 'saif', lambda t: '<' + t + '>'), ['saif_0001.wav|<هلا   والله>'])
 
 
+def have(*modules):
+    import importlib.util
+    return all(importlib.util.find_spec(m) for m in modules)
+
+
+@unittest.skipUnless(have('numpy'), 'needs numpy (the training environments have it)')
+class MuffledTest(unittest.TestCase):
+    """The first voice (21 Nov) was «صوت هواء ومش واضح»: all 280 clips were muffled at the source."""
+
+    def speech(self, seconds=4.0, seed=1):
+        """Noise with the long-term spectrum of clear speech, in syllable-like bursts, with pauses."""
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        n = int(seconds * prep_real.SR_OUT)
+        X = np.fft.rfft(rng.standard_normal(n))
+        f = np.fft.rfftfreq(n, 1 / prep_real.SR_OUT)
+        centers = np.arange(len(prep_real.CLEAR_SPEECH_DB)) * prep_real.EQ_STEP + prep_real.EQ_STEP / 2
+        y = np.fft.irfft(X * 10 ** (np.interp(f, centers, prep_real.CLEAR_SPEECH_DB) / 20), n)
+        t = np.arange(n) / prep_real.SR_OUT
+        env = (np.sin(2 * np.pi * 3 * t) > -0.2) * (t % 2.0 < 1.5)  # words, then half a second of pause
+        return (y / np.abs(y).max() * 0.5 * env).astype('float32')
+
+    def muffle(self, y, seed=2):
+        """A covered microphone: 16 dB lost from 2 kHz up, and the room's hiss on top."""
+        import numpy as np
+        X = np.fft.rfft(y)
+        f = np.fft.rfftfreq(len(y), 1 / prep_real.SR_OUT)
+        lost = np.interp(f, [0, 1000, 2000, 4000, 11025], [0, 0, -14, -18, -18])
+        room = np.random.default_rng(seed).standard_normal(len(y)) * 10 ** (-58 / 20)
+        return (np.fft.irfft(X * 10 ** (lost / 20), len(y)) + room).astype('float32')
+
+    def pause_to_speech_db(self, y):
+        import numpy as np
+        t = np.arange(len(y)) / prep_real.SR_OUT
+        pause, talk = y[(t % 2.0 > 1.6) & (t % 2.0 < 1.95)], y[t % 2.0 < 1.4]
+        return 10 * np.log10(np.mean(pause ** 2) / np.mean(talk ** 2) + 1e-12)
+
+    def test_clear_speech_measures_clear_and_muffled_speech_measures_muffled(self):
+        clear = self.speech()
+        self.assertLess(abs(prep_real.muffled_by(prep_real.speech_spectrum([clear]))), 2.0)
+        self.assertGreater(prep_real.muffled_by(prep_real.speech_spectrum([self.muffle(clear)])), 10.0)
+
+    def test_repair_brings_the_consonants_back_without_raising_the_room(self):
+        clear = self.speech()
+        dull = self.muffle(clear)
+        curve = prep_real.eq_curve(prep_real.speech_spectrum([dull]))
+        self.assertLessEqual(max(curve), prep_real.EQ_MAX)
+        self.assertLessEqual(max(curve[prep_real.EQ_HIGH_FROM // prep_real.EQ_STEP:]), prep_real.EQ_MAX_HIGH)
+        self.assertLessEqual(curve[0], 0.0, 'rumble is never raised')
+        fixed = prep_real.repair(dull, curve)
+        self.assertEqual(len(fixed), len(dull))
+        self.assertLess(abs(prep_real.muffled_by(prep_real.speech_spectrum([fixed]))), 3.0)
+        # an equalizer alone would lift the hiss in the pauses by ~10 dB against the speech; the gate must hold it
+        self.assertLessEqual(self.pause_to_speech_db(fixed), self.pause_to_speech_db(dull) + 1.0)
+
+    def test_clips_are_repaired_in_place_once_and_clear_clips_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for i in range(3):
+                prep_real.write_clip(d / f'c{i}.wav', self.muffle(self.speech(seed=10 + i), seed=20 + i), prep_real.SR_OUT)
+            first = prep_real.repair_clips(d)
+            self.assertTrue(first['repaired'])
+            self.assertGreater(first['muffled_db'], 10.0)
+            self.assertLess(abs(first['after_db']), 3.0)
+            self.assertFalse(prep_real.repair_clips(d)['repaired'], 'a second run must not equalize twice')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            prep_real.write_clip(d / 'c.wav', self.speech(), prep_real.SR_OUT)
+            before = (d / 'c.wav').read_bytes()
+            self.assertFalse(prep_real.repair_clips(d)['repaired'])
+            self.assertEqual((d / 'c.wav').read_bytes(), before)
+
+
+class SecondListeningTest(unittest.TestCase):
+    """The person told a story instead of reading the list (21 Nov: 0 of 280 clips were a sentence
+    from the screen), so every text was Whisper's guess."""
+
+    def test_a_clip_whose_text_the_second_listening_does_not_hear_is_dropped(self):
+        lines = ['a.wav\tقال لي يا حبيبي أنا بنفسي وصلتها.', 'b.wav\tترك التليفون ومطلعي. شلون؟', 'c.wav\tبعد ما تعبوا من البحث.']
+        heard = {'a.wav': 'قال لي يا حبيبي انا بنفسي وصّلتها', 'b.wav': 'راح السوق واشترى خبز', 'c.wav': ''}
+        kept, out = prep_real.keep_agreed(lines, heard)
+        self.assertEqual(kept, lines[:1])
+        self.assertEqual(out, ['b.wav', 'c.wav'])
+        self.assertEqual(prep_real.agreement('الْيَوْمُ أَروح', 'اليوم اروح'), 1.0)
+        self.assertEqual(prep_real.agreement('', 'x'), 0.0)
+
+
+@unittest.skipUnless(have('torch', 'lightning'), 'needs torch and lightning (the training environment has them)')
+class LatestCheckpointTest(unittest.TestCase):
+    """The first voice was exported from an early epoch: Lightning 2.6 writes last.ckpt only when a
+    "best" checkpoint is written, and the validation number stops improving early."""
+
+    def test_last_ckpt_is_the_newest_epoch_even_when_validation_only_gets_worse(self):
+        import lightning as L
+        import torch
+        from train_main import KeepLatest
+
+        class Toy(L.LightningModule):  # two hand-stepped optimizers, as Piper trains
+            def __init__(self):
+                super().__init__()
+                self.automatic_optimization = False
+                self.g, self.d = torch.nn.Linear(4, 4), torch.nn.Linear(4, 1)
+
+            def training_step(self, batch, i):
+                for opt, net in zip(self.optimizers(), (self.g, self.d)):
+                    loss = net(batch[0]).pow(2).mean()
+                    opt.zero_grad()
+                    self.manual_backward(loss)
+                    opt.step()
+
+            def validation_step(self, batch, i):
+                self.log('val_mel', float(self.current_epoch))
+
+            def configure_optimizers(self):
+                return [torch.optim.SGD(self.g.parameters(), lr=0.01), torch.optim.SGD(self.d.parameters(), lr=0.01)]
+
+        data = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.randn(16, 4)), batch_size=8)
+        with tempfile.TemporaryDirectory() as d:
+            trainer = L.Trainer(max_epochs=7, default_root_dir=d, callbacks=[KeepLatest(3)], enable_checkpointing=False,
+                                enable_progress_bar=False, enable_model_summary=False)
+            trainer.fit(Toy(), data, data)
+            found = sorted(p.name for p in Path(d).rglob('*.ckpt*'))
+            self.assertEqual(found, ['last.ckpt'], 'one file, and no half-written one left behind')
+            ckpt = torch.load(next(Path(d).rglob('last.ckpt')), map_location='cpu', weights_only=False)
+            self.assertEqual(ckpt['global_step'], 7 * 2 * 2, 'the model after the last step of the last epoch')
+
+
 class NotebookTest(unittest.TestCase):
     def test_notebook_is_built_from_these_files_and_its_code_compiles(self):
         r = subprocess.run([sys.executable, str(ROOT / 'tools' / 'build-real-notebook.py'), '--check'])
