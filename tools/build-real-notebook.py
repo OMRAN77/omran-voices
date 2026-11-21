@@ -55,7 +55,7 @@ WHISPER = 'large-v3'                   # يفرّغ التسجيلات (التس
 TRAIN_HOURS = 9.0                      # وقت التدريب في هالتشغيلة (كرت T4 يمشي ~٠٫٧ خطوة بالثانية: ٩ ساعات ≈ ٢٢ ألف خطوة)؛ تشغيلة ثانية تكمل
 ROUND = 2                              # يزيد لما تتغيّر طريقة تجهيز الصوت: التدريب يبدأ من جديد وما يكمل على نسخة تعلّمت من صوت مكتوم
 SESSION_HOURS = 11.5                   # أطول جلسة (Kaggle ١٢ ساعة)
-UPLOAD_EVERY_MIN = 30                  # نسخة وعيّنات كل نص ساعة
+UPLOAD_EVERY_MIN = 60                  # نسخة وعيّنات كل ساعة (كل نسخة ~٩٠٠ ميجا في المستودع الخاص)
 VOICE_FILE = 'ar_AE-{}_gulf-medium'    # ar_AE-saif_gulf-medium.onnx
 '''
 
@@ -84,8 +84,8 @@ def run(cmd, log=None, env=None):
         raise RuntimeError(f'failed ({p.returncode}): {cmd}\\n' + ''.join(tail[-15:]))
 
 
-def out(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+def out(cmd, env=None):
+    return subprocess.run(cmd, capture_output=True, text=True, check=True, env=env).stdout.strip()
 
 
 def hours_left():
@@ -262,8 +262,34 @@ def export():
     return at
 
 
+SCORES = []  # (time, where in training, clarity)
+
+
+def clarity():
+    """How much of the sample sentences Whisper hears in the samples, 0-1, on the card that is not
+    training (the voice the training starts from is ~0.97; the first run's «مش واضح» was 0.76)."""
+    try:
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES='1' if len(gpus) > 1 else '')
+        text = out([PY_W, 'prep_real.py', 'score', '--samples', 'out/samples', '--name', f'{VOICE}_gulf', '--model', WHISPER], env=env)
+        return float(text.split('SCORE')[-1].split()[0])
+    except Exception as e:  # a measurement must never stop the training
+        print('clarity not measured this time:', type(e).__name__, str(e)[-200:])
+        return None
+
+
 def upload(final=False):
     ok = export()
+    score = clarity() if ok else None
+    if ok:
+        SCORES.append((time.strftime('%H:%M'), ok, score))
+        if score is not None and score >= max([s for _, _, s in SCORES[:-1] if s is not None], default=-1.0):
+            # the clearest version so far is kept beside the newest: nine hours on twenty minutes of
+            # speech can pass its best point
+            shutil.rmtree('out/best', ignore_errors=True)
+            Path('out/best').mkdir(parents=True)
+            for f in [Path(f'out/{NAME}.onnx'), Path(f'out/{NAME}.onnx.json')] + sorted(Path('out/samples').glob(f'{VOICE}_gulf_*.wav')):
+                shutil.copy(f, 'out/best')
+            Path('out/best/from.txt').write_text(f'{ok}, clarity {score}\\n')
     Path('out/logs').mkdir(parents=True, exist_ok=True)
     for f in W.glob('*.log'):
         shutil.copy(f, 'out/logs')
@@ -271,7 +297,7 @@ def upload(final=False):
     api.upload_folder(folder_path='out', repo_id=MODEL_REPO, commit_message=f'{VOICE} voice' + (' (final)' if final else ''))
     if ok:
         api.upload_file(path_or_fileobj='snap.ckpt', path_in_repo=CKPT, repo_id=MODEL_REPO, commit_message='checkpoint ' + VOICE)
-    print(time.strftime('%H:%M'), 'uploaded to', MODEL_REPO, f'(model and samples from {ok})' if ok else '(logs only)')
+    print(time.strftime('%H:%M'), 'uploaded to', MODEL_REPO, f'(model and samples from {ok}, clarity {score})' if ok else '(logs only)')
     return ok
 
 
@@ -286,6 +312,9 @@ while train.poll() is None:
 print('training ended, code', train.returncode)
 print(Path('train.log').read_text(errors='replace')[-3000:])
 DONE = upload(final=True)
+print('CLARITY through the training (1 = every letter of the sample sentences heard; the starting voice ~0.97, the first run 0.76):')
+for t, at, s in SCORES:
+    print(' ', t, at, s)
 print('done in', round((time.time() - T0) / 3600, 1), 'hours')
 '''
 
@@ -293,9 +322,16 @@ LISTEN = '''
 # اسمع العيّنات هني. نفسها محفوظة في المستودع الخاص تحت samples/
 from IPython.display import Audio, display
 assert DONE, 'التدريب ما طلّع نموذج: شوف السجل فوق'
+print('آخر نسخة من التدريب:', DONE)
 for p in sorted(Path('out/samples').glob(f'{VOICE}_gulf_*.wav')):
     print(p.name)
     display(Audio(filename=str(p)))
+best = Path('out/best/from.txt')
+if best.exists() and not best.read_text().startswith(DONE + ','):
+    print('أوضح نسخة أثناء التدريب (بقياس الآلة):', best.read_text().strip())
+    for p in sorted(Path('out/best').glob(f'{VOICE}_gulf_*.wav')):
+        print(p.name)
+        display(Audio(filename=str(p)))
 '''
 
 

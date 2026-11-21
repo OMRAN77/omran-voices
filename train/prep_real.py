@@ -520,6 +520,22 @@ def site_vowel():
     return lambda t: pausal(catt(t))
 
 
+def cmd_score(a):
+    """How much of what the voice was asked to say Whisper hears in its samples: 0-1 (the voice the
+    training starts from scores about 0.95; the first voice we trained, heard as «مش واضح», 0.7).
+    Training is nine hours with nobody listening: this number, once an hour, says where it is."""
+    import whisper
+    import samples_real
+    model = whisper.load_model(a.model)
+    scores = []
+    for i, text in enumerate(samples_real.TEXTS, 1):
+        y, sr = read_wav(Path(a.samples) / f'{a.name}_{i}.wav')
+        heard = model.transcribe(resample(y, sr, 16000), language='ar', condition_on_previous_text=False, temperature=0.0)['text']
+        scores.append(agreement(text, heard))
+    print('SCORE', round(sum(scores) / len(scores), 3))
+    return 0
+
+
 def cmd_list(a):
     lines = build_list(a.data, a.speaker, site_vowel())
     Path(a.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -545,12 +561,16 @@ def main(argv=None):
     ch.add_argument('--data', required=True)
     ch.add_argument('--speaker', required=True)
     ch.add_argument('--model', default='large-v3')
+    sc = sub.add_parser('score')
+    sc.add_argument('--samples', required=True)
+    sc.add_argument('--name', required=True)
+    sc.add_argument('--model', default='large-v3')
     li = sub.add_parser('list')
     li.add_argument('--data', required=True)
     li.add_argument('--speaker', required=True)
     li.add_argument('--out', required=True)
     a = ap.parse_args(argv)
-    return {'transcribe': cmd_transcribe, 'cut': cmd_cut, 'check': cmd_check, 'list': cmd_list}[a.cmd](a)
+    return {'transcribe': cmd_transcribe, 'cut': cmd_cut, 'check': cmd_check, 'score': cmd_score, 'list': cmd_list}[a.cmd](a)
 
 
 if __name__ == '__main__':

@@ -308,6 +308,59 @@ class NotebookTest(unittest.TestCase):
         import re
         self.assertIsNone(re.search(r'hf_[A-Za-z0-9]{30,}', text), 'no token in the notebook')
 
+    def test_the_clearest_version_is_kept_beside_the_newest_and_a_failed_measure_stops_nothing(self):
+        # the notebook's own upload step, with the card, Whisper and Hugging Face replaced by stand-ins
+        import os
+        import shutil
+        import time
+        nb = json.loads((HERE / 'omran-voice-real.ipynb').read_text(encoding='utf-8'))
+        cell = next(''.join(c['source']) for c in nb['cells'] if 'def upload(' in ''.join(c['source']))
+        part = cell[cell.index('SCORES = []'):cell.index('last_up = time.time()')]
+        runs = iter([('epoch 4 step 100', 0.5), ('epoch 8 step 200', 0.8), ('epoch 12 step 300', None), ('epoch 16 step 400', 0.6)])
+        now, sent = {}, []
+
+        class Api:
+            def upload_folder(self, **k):
+                sent.append(sorted(p.relative_to('out').as_posix() for p in Path('out').rglob('*') if p.is_file()))
+
+            def upload_file(self, **k):
+                sent.append(k['path_in_repo'])
+
+        def export():
+            now['at'], now['score'] = next(runs)
+            for f in ('out/x.onnx', 'out/x.onnx.json', 'out/samples/saif_gulf_1.wav'):
+                Path(f).write_text(now['at'])
+            Path('snap.ckpt').write_text(now['at'])
+            return now['at']
+
+        def out(cmd, env=None):
+            self.assertEqual(env['CUDA_VISIBLE_DEVICES'], '1', 'the card that is not training')
+            if now['score'] is None:
+                raise RuntimeError('Whisper fell over')
+            return 'loading...\nSCORE ' + str(now['score'])
+
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            os.chdir(d)
+            try:
+                Path('out/samples').mkdir(parents=True)
+                Path('data').mkdir()
+                Path('data/saif.report.json').write_text('{}')
+                ns = dict(os=os, time=time, shutil=shutil, Path=Path, W=Path(d), gpus=['T4', 'T4'], PY_W='py', WHISPER='w', VOICE='saif',
+                          NAME='x', CKPT='ckpt/saif_gulf_r2.ckpt', MODEL_REPO='r', api=Api(), out=out, export=export, print=lambda *a: None)
+                exec(part, ns)
+                got = [ns['upload']() for _ in range(3)] + [ns['upload'](final=True)]
+                self.assertEqual(got[-1], 'epoch 16 step 400')
+                self.assertEqual([s for _, _, s in ns['SCORES']], [0.5, 0.8, None, 0.6])
+                self.assertTrue(Path('out/best/from.txt').read_text().startswith('epoch 8 step 200, clarity 0.8'))
+                self.assertEqual(Path('out/best/x.onnx').read_text(), 'epoch 8 step 200')
+                self.assertEqual(Path('out/best/saif_gulf_1.wav').read_text(), 'epoch 8 step 200')
+                self.assertEqual(Path('out/x.onnx').read_text(), 'epoch 16 step 400', 'the newest stays the main file')
+                self.assertEqual(sent.count('ckpt/saif_gulf_r2.ckpt'), 4)
+                self.assertIn('best/x.onnx', sent[-2])
+            finally:
+                os.chdir(cwd)
+
 
 if __name__ == '__main__':
     unittest.main()
