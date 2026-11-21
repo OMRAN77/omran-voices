@@ -269,8 +269,12 @@ async function save(body) {
     const rid = String((it && it.rid) || '');
     if (!/^[a-z0-9]{6,32}$/.test(rid) || seen.has(rid)) { rejected.push({ rid, reason: 'معرّف غلط' }); continue; }
     seen.add(rid);
-    const text = cleanText(it.text);
-    if (!text) { rejected.push({ rid, reason: 'النص فاضي' }); continue; }
+    // A piece of a continuous take («تسجيل متواصل»): the person read down a list or just talked, so
+    // there is no sentence text. It carries its take (session), its place in it (part) and the
+    // sentences that were on screen (prompt_ids), to be transcribed and cut before any training.
+    const free = it.free === true;
+    const text = free ? '' : cleanText(it.text);
+    if (!text && !free) { rejected.push({ rid, reason: 'النص فاضي' }); continue; }
     const b64 = String(it.wav || '');
     if (b64.length > MAX_WAV_BYTES * 1.4) { rejected.push({ rid, reason: 'الملف كبير' }); continue; }
     const bytes = Buffer.from(b64, 'base64');
@@ -278,16 +282,20 @@ async function save(body) {
     const w = inspectWav(bytes);
     if (w.error) { rejected.push({ rid, reason: w.error }); continue; }
     const sid = Number.isInteger(it.sid) && it.sid >= 0 && it.sid < 1000000 ? it.sid : -1;
-    const original = cleanText(it.original) || text;
+    const original = free ? '' : cleanText(it.original) || text;
     const ts = Number(it.ts) > 0 ? new Date(Number(it.ts)) : new Date();
+    const part = Number.isInteger(it.part) && it.part >= 0 && it.part < 10000 ? it.part : 0;
     good.push({
-      rid, bytes, name: String(Math.max(sid, 0)).padStart(5, '0') + '_' + rid + '.wav',
-      meta: {
+      rid, bytes, name: (free ? 'free' + String(part).padStart(4, '0') : String(Math.max(sid, 0)).padStart(5, '0')) + '_' + rid + '.wav',
+      meta: Object.assign({
         text, original_text: original, edited: text !== original, speaker, speaker_id: dir,
-        sentence_id: sid, register: REGS.includes(it.reg) ? it.reg : '', topic: cleanText(it.topic, 30),
+        sentence_id: free ? -1 : sid, register: REGS.includes(it.reg) ? it.reg : '', topic: cleanText(it.topic, 30),
         dialect: /^[a-z]{2,20}$/.test(String(it.dialect || '')) ? it.dialect : '',
         duration: w.seconds, sampling_rate: w.rate, recorded_at: isNaN(ts) ? new Date().toISOString() : ts.toISOString(), consent: body.consent === true,
-      },
+      }, free ? {
+        free: true, session: /^[a-z0-9]{6,32}$/.test(String(it.session || '')) ? it.session : '', part,
+        prompt_ids: (Array.isArray(it.prompt) ? it.prompt : []).filter((n) => Number.isInteger(n) && n >= 0 && n < 1000000).slice(0, 60),
+      } : null),
     });
   }
   if (!good.length) return { ok: true, saved: [], rejected, batch: '', seconds: 0, count: 0 };

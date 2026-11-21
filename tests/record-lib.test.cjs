@@ -126,3 +126,15 @@ test('الأسماء والوقت والمعرّفات: متّفقة مع الخ
   assert.strictEqual(ids.size, 500);
   for (const id of ids) assert.match(id, /^[a-z0-9]{6,32}$/);
 });
+
+test('التسجيل المتواصل: القطعة تنقص عند أوّل سكتة بعد ٤٥ ثانية، وعند ٥٨ ثانية مهما كان، والحد ٣٠ دقيقة', () => {
+  assert.strictEqual(lib.cutNow(44.9, 0), false, 'قبل ٤٥ ما يقص حتى لو سكت');
+  assert.strictEqual(lib.cutNow(45, 0.019), true, 'سكتة بعد ٤٥');
+  assert.strictEqual(lib.cutNow(50, 0.3), false, 'يتكلم: يكمّل');
+  assert.strictEqual(lib.cutNow(58, 0.9), true, 'حدّ القطعة');
+  assert.strictEqual(lib.FREE_MAX_SEC, 1800);
+  // أكبر قطعة (٥٨ ث) بعد الترميز تحت حدّ Vercel ٤٫٥ م.ب، وتنرسل لحالها
+  const size = lib.CUT_HARD_SEC * lib.TARGET_RATE * 2 + 44;
+  assert.ok(Math.ceil(size * 4 / 3) + 2000 < 4.5e6);
+  assert.strictEqual(lib.batchPlan([{ rid: 'a', speaker: 'س', size }, { rid: 'b', speaker: 'س', size }]).length, 1);
+});

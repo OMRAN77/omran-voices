@@ -264,3 +264,28 @@ test('تسجيل دقيقة كاملة: ينحفظ، وطلبه لحاله تح�
     const queue = [{ rid: 'a', speaker: 'س', size: 60 * 48000 + 44 }, { rid: 'b', speaker: 'س', size: 60 * 48000 + 44 }];
     assert.strictEqual(lib.batchPlan(queue).length, 1, 'تسجيل الدقيقة ينرسل لحاله');
   }));
+
+test('تسجيل متواصل: قطعة بدون نص جملة تنحفظ ومعها جلستها ورقمها والجمل اللي كانت على الشاشة، والجملة العادية بدون نص تنرفض', () =>
+  // المالك ٢١ نوفمبر: «اذا تريد 30 دقيقة ليش ماتخليها مره وحده… هذا عذاب يعني اسكت وارفع ويتكلم».
+  withHub(async (hub, rec) => {
+    const piece = (rid, part) => ({ rid, sid: -1, text: '', original: '', reg: '', topic: '', ts: Date.UTC(2026, 10, 21, 8, part, 0),
+      free: true, session: 'sess0001abcd', part, prompt: [7, 12, 'x', -4, 99], wav: wav(58).toString('base64') });
+    const r1 = await rec.save({ speaker: 'سيف', consent: true, items: [piece('piece00a', 0)] });
+    const r2 = await rec.save({ speaker: 'سيف', consent: true, items: [piece('piece00b', 1)] });
+    assert.deepStrictEqual([r1.saved, r1.rejected, r2.saved], [['piece00a'], [], ['piece00b']]);
+    const files = hub.state.repos.get(REPO).files;
+    const dir = 'data/' + rec.speakerDir('سيف') + '/' + r2.batch + '/';
+    assert.ok(files.has(dir + 'free0001_piece00b.wav'), [...files.keys()].join('\n'));
+    const line = JSON.parse(files.get(dir + 'metadata.jsonl').bytes.toString('utf8').trim());
+    assert.deepStrictEqual(
+      { text: line.text, sid: line.sentence_id, free: line.free, session: line.session, part: line.part, prompt: line.prompt_ids, dur: line.duration, consent: line.consent },
+      { text: '', sid: -1, free: true, session: 'sess0001abcd', part: 1, prompt: [7, 12, 99], dur: 58, consent: true });
+    assert.strictEqual((await rec.stats()).total.seconds, 116, 'العدّاد يحسب القطعتين');
+    // جملة عادية بدون نص: مثل قبل
+    const bad = await rec.save({ speaker: 'سيف', consent: true, items: [item('normal01', { text: '   ' })] });
+    assert.deepStrictEqual(bad.rejected, [{ rid: 'normal01', reason: 'النص فاضي' }]);
+    // والجملة العادية ما ينضاف لها أي حقل جديد
+    const ok = await rec.save({ speaker: 'سيف', consent: true, items: [item('normal02')] });
+    const norm = JSON.parse(files.get('data/' + rec.speakerDir('سيف') + '/' + ok.batch + '/metadata.jsonl').bytes.toString('utf8').trim());
+    assert.ok(!('free' in norm) && !('session' in norm) && !('prompt_ids' in norm));
+  }));

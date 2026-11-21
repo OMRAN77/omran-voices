@@ -193,6 +193,19 @@
     return { wav: encodeWav(int16, TARGET_RATE), seconds: Math.round(seconds * 100) / 100, level: lv, verdict: judge(lv, seconds) };
   }
 
+  /* ---------- a continuous take ---------- */
+  // The owner (21 Nov): «اذا تريد 30 دقيقة ليش ماتخليها مره وحده… هذا عذاب يعني اسكت وارفع ويتكلم».
+  // One press, up to 30 minutes; the page cuts the take into pieces of under a minute and uploads
+  // them by itself. A piece ends at the first quiet chunk (a pause between words) after 45 s, and
+  // at 58 s whatever happens: 58 s is 2.8 MB of WAV, under the server's cap.
+  const FREE_MAX_SEC = 30 * 60;
+  const CUT_SOFT_SEC = 45;
+  const CUT_HARD_SEC = 58;
+  const CUT_QUIET = 0.02;
+  function cutNow(seconds, chunkPeak) {
+    return seconds >= CUT_HARD_SEC || (seconds >= CUT_SOFT_SEC && chunkPeak < CUT_QUIET);
+  }
+
   /* ---------- upload batches and counters ---------- */
   // Takes from the front of the queue (same speaker only) while the JSON stays under Vercel's 4.5 MB.
   function batchPlan(queue, maxItems = 8, maxBytes = 2900000) {
@@ -219,7 +232,7 @@
     return r;
   }
 
-  const api = { TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, DIALECTS, dialectLabel, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
+  const api = { FREE_MAX_SEC, CUT_SOFT_SEC, CUT_HARD_SEC, cutNow, TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, DIALECTS, dialectLabel, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OVRec = api;
 })(typeof window !== 'undefined' ? window : globalThis);
