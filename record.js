@@ -4,7 +4,7 @@
   'use strict';
   const L = window.OVRec;
   const $ = (id) => document.getElementById(id);
-  const MAX_SEC = 25;                 // one sentence never needs more; also keeps the WAV well under the server cap
+  const MAX_SEC = 60;                 // the owner (21 Nov): «يوقف على 25 ثانيه، سوها على الاقل دقيقة». 60 s = 2.88 MB WAV, sent alone (3.84 MB as JSON, under Vercel's 4.5 MB)
   const IDLE_CLOSE_MS = 60 * 1000;    // the microphone is released a minute after the last take
 
   /* ---------- small helpers ---------- */
