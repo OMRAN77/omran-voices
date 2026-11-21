@@ -38,7 +38,8 @@ test('WAV: يقبل أحادي 16 بت، ويرفض غير WAV وستيريو و
   const bits8 = wav(2); bits8.writeUInt16LE(8, 34);
   assert.match(inspectWav(bits8).error, /16/);
   assert.match(inspectWav(wav(0.2)).error, /قصير/);
-  assert.match(inspectWav(wav(31)).error, /طويل/);
+  assert.strictEqual(inspectWav(wav(60)).error, undefined, 'دقيقة كاملة تنقبل');
+  assert.match(inspectWav(wav(63)).error, /طويل/);
   assert.match(inspectWav(wav(2, 24000, 0)).error, /صامت/);
   const weird = wav(2); weird.writeUInt32LE(96000 * 4, 24);
   assert.match(inspectWav(weird).error, /معدّل/);
@@ -247,3 +248,19 @@ test('/api/record: بلا VOICES_RECORD_KEY يقفل كل شي (500)', async () 
     assert.match(res.body.error, /VOICES_RECORD_KEY/);
   } finally { if (old !== undefined) process.env.VOICES_RECORD_KEY = old; }
 });
+
+test('تسجيل دقيقة كاملة: ينحفظ، وطلبه لحاله تحت حدّ Vercel (٤٫٥ م.ب)، والصفحة توقّف عند ٦٠ ثانية', () =>
+  // المالك ٢١ نوفمبر: «يوقف على 25 ثانيه، سوها على الاقل دقيقة».
+  withHub(async (hub, rec) => {
+    const minute = item('minute01', { wav: wav(60).toString('base64') });
+    const body = { speaker: 'سيف', consent: true, items: [minute] };
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) < 4.5e6, 'الطلب: ' + Buffer.byteLength(JSON.stringify(body)));
+    const out = await rec.save(body);
+    assert.deepStrictEqual(out.rejected || [], [], JSON.stringify(out.rejected));
+    assert.strictEqual((await rec.stats()).total.count, 1);
+    const src = require('fs').readFileSync(path.join(ROOT, 'record.js'), 'utf8');
+    assert.match(src, /const MAX_SEC = 60;/);
+    const lib = require(path.join(ROOT, 'record-lib.js'));
+    const queue = [{ rid: 'a', speaker: 'س', size: 60 * 48000 + 44 }, { rid: 'b', speaker: 'س', size: 60 * 48000 + 44 }];
+    assert.strictEqual(lib.batchPlan(queue).length, 1, 'تسجيل الدقيقة ينرسل لحاله');
+  }));
