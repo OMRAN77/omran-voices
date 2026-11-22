@@ -70,7 +70,17 @@
   .review audio { width: 100%; height: 44px; }
   .pair { display:flex; gap: 10px; } .pair > button { flex: 1; min-width: 0; }
   .pair .primary { flex: 2; }
-  .under { display:flex; justify-content: center; gap: 10px; margin-top: 10px; }
+  .under { display:flex; justify-content: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  /* the microphone test: 15 seconds heard back before any take */
+  .mictest h2 { text-align: center; }
+  .gated .modes, .gated #sentenceCard, .gated .keys { display: none; }
+  .tips { margin: 0; padding: 0 20px 0 0; color: var(--muted); font-size: 14px; line-height: 1.9; }
+  .testtext { font-size: 20px; line-height: 1.9; text-align: center; margin: 0 0 12px; }
+  .testresult { display:flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+  .testresult audio { width: 100%; height: 44px; }
+  .verdict { font-size: 15px; line-height: 1.8; }
+  .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); }
+  .verdict ul { margin: 6px 0 0; padding: 0 20px 0 0; color: var(--text); }
 
   /* counters */
   .bar { display:flex; gap: 10px; align-items: stretch; }
@@ -131,7 +141,7 @@
     </div>
     <section class="card" id="sentenceCard">
      <div id="freeBox" hidden>
-      <div class="hint" style="margin:0 0 8px">اقرا من هالجمل ورا بعض، أو تكلّم بكلامك. ما تحتاج توقف ولا ترفع.</div>
+      <div class="hint" style="margin:0 0 8px">اقرا هالجمل ورا بعض مثل ما هي مكتوبة. ما تحتاج توقف ولا ترفع.</div>
       <div id="readList" class="readlist" lang="ar"></div>
       <div class="under"><button id="more" type="button">جمل ثانية ↻</button></div>
      </div>
@@ -153,6 +163,32 @@
     </section>
 
     <section class="card" id="stageCard">
+      <div class="mictest" id="micTest" hidden>
+        <h2>أول شي: تجربة المايك (١٥ ثانية)</h2>
+        <ul class="tips">
+          <li>سجّل بمايك الجوال نفسه، وافصل سمّاعة البلوتوث.</li>
+          <li>قرّب الجوال شبر من فمك.</li>
+          <li>مكان هادي، والمكيّف مطفّي لو تقدر.</li>
+        </ul>
+        <div id="testIntro">
+          <div class="hint" style="margin:10px 0 6px">اضغط واقرا هالكلام بصوتك العادي:</div>
+          <p class="testtext" lang="ar">هلا والله، شحالك اليوم؟ عساك بخير. بغيت أروح السوق الحين، بس الجو حر وايد. باجر إن شاء الله بنتلاقى في البيت عقب صلاة المغرب.</p>
+          <button id="testGo" class="primary" style="width:100%" type="button">ابدأ التجربة</button>
+        </div>
+        <div id="testResult" class="testresult" hidden>
+          <audio id="testPlayer" controls></audio>
+          <div id="testVerdict" class="verdict" role="status" aria-live="polite"></div>
+          <div class="pair">
+            <button id="testRedo" type="button">جرّب مرة ثانية</button>
+            <button id="testOk" class="primary" type="button">سمعته وهو واضح ✓</button>
+          </div>
+          <div class="under">
+            <button id="testShare" class="link" type="button" hidden>أرسل التجربة لعمران</button>
+            <button id="testAnyway" class="link" type="button" hidden>كمّل على أي حال</button>
+          </div>
+        </div>
+        <div id="testStatus" class="hint" role="status" aria-live="polite"></div>
+      </div>
       <div class="stage" id="stage">
         <div id="timer">0:00</div>
         <button id="mic" class="mic" type="button" aria-label="سجّل">
@@ -168,7 +204,7 @@
           <button id="next" class="primary" type="button">التالي ✓</button>
         </div>
       </div>
-      <div class="under"><button id="skip" type="button">تخطّى</button></div>
+      <div class="under"><button id="skip" type="button">تخطّى</button><button id="micAgain" class="link" type="button" hidden>جرّب المايك مرة ثانية</button></div>
       <div class="hint keys" id="keys">المسافة: سجّل / وقّف · Enter: التالي · R: عيد · S: تخطّى</div>
     </section>
 

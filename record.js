@@ -9,7 +9,7 @@
   const L = window.OVRec;
   const $ = (id) => document.getElementById(id);
   const PAGE = 12;                    // sentences on screen in a continuous take
-  const FREE_IDLE = 'اضغط الميكروفون وتكلّم لين ٣٠ دقيقة. لما تخلص اضغطه مرة ثانية.';
+  const FREE_IDLE = 'اضغط الميكروفون واقرا الجمل لين ٣٠ دقيقة. لما تخلص اضغطه مرة ثانية.';
   const MAX_SEC = 60;                 // the owner (21 Nov): «يوقف على 25 ثانيه، سوها على الاقل دقيقة». 60 s = 2.88 MB WAV, sent alone (3.84 MB as JSON, under Vercel's 4.5 MB)
   const IDLE_CLOSE_MS = 60 * 1000;    // the microphone is released a minute after the last take
 
@@ -43,6 +43,7 @@
     stats: null, statsErr: '', shown: { mine: 0, total: 0 }, synced: false,
     mode: 'free',                     // free (one continuous take) | one (sentence by sentence)
     wake: null, worker: null, jobs: new Map(), jobId: 0,
+    micPass: false, test: null, testTimer: 0, // the microphone test: passed in this tab? its take, to hear back
   };
   const posKey = () => 'ov_rec_pos:' + L.nameKey(S.name) + (S.dialect ? ':' + S.dialect : '');
 
@@ -184,14 +185,18 @@
   function setState(st) {
     S.state = st;
     const stage = $('stage');
+    const gate = !S.micPass;          // nothing is recorded before the microphone test was heard and accepted
+    $('micTest').hidden = !gate;
+    $('app').classList.toggle('gated', gate); // the test is the first thing on screen: the sentences wait behind it
     $('stageCard').classList.toggle('rec-on', st === 'rec');
-    stage.hidden = st === 'review' || st === 'saving';
-    $('review').hidden = !(st === 'review' || st === 'saving');
+    stage.hidden = gate || st === 'review' || st === 'saving';
+    $('review').hidden = gate || !(st === 'review' || st === 'saving');
     $('text').disabled = st === 'rec' || st === 'busy' || st === 'opening';
     $('mic').disabled = st === 'busy' || st === 'opening';
     $('mic').setAttribute('aria-label', st === 'rec' ? 'وقّف' : 'سجّل');
     $('skip').disabled = st === 'busy' || st === 'saving';
-    $('skip').hidden = S.mode === 'free';
+    $('skip').hidden = gate || S.mode === 'free';
+    $('micAgain').hidden = gate || st !== 'idle';
     $('modeFree').disabled = $('modeOne').disabled = st !== 'idle';
     $('next').disabled = st === 'saving';
     $('redo').disabled = st === 'saving';
@@ -209,6 +214,7 @@
     if (!r) return;
     r.chunks.push(f32);
     r.n += f32.length;
+    if (r.test) { if (r.n / S.mic.rate >= L.TEST_SEC) testStop(); return; }
     let p = 0;
     for (let i = 0; i < f32.length; i++) { const a = Math.abs(f32[i]); if (a > p) p = a; }
     if (p > S.peak) S.peak = p;
@@ -276,9 +282,110 @@
     if (S.state === 'rec') S.raf = requestAnimationFrame(meterLoop);
     else $('mic').style.setProperty('--lvl', '0');
   }
+  /* ---------- the microphone test ---------- */
+  // Saif's first half hour was recorded through a muffled microphone and nobody heard it until two
+  // nights of training had been spent on it. Now: 15 seconds first, played back to the person (and
+  // shareable to the owner), with what the numbers say about them (L.micVerdict). The ear decides;
+  // «كمّل على أي حال» is there because the numbers can be wrong about a good microphone.
+  const PASS_KEY = 'ov_mic_ok';
+  function micPassed() {
+    try { return sessionStorage.getItem(PASS_KEY) === '1'; } catch (e) { return false; /* no session storage: asked once per page load */ }
+  }
+  function testReset() {
+    clearTimeout(S.testTimer);
+    if (S.test) { URL.revokeObjectURL(S.test.url); $('testPlayer').removeAttribute('src'); S.test = null; }
+    $('testIntro').hidden = false; $('testResult').hidden = true;
+    $('testGo').disabled = false; $('testGo').textContent = 'ابدأ التجربة';
+    $('testStatus').textContent = '';
+  }
+  async function testStart() {
+    if (S.state !== 'idle' || S.micPass) return;
+    testReset();
+    setState('test');
+    $('testGo').disabled = true;
+    $('testStatus').textContent = 'جاري تشغيل الميكروفون…';
+    try { await openMic(); } catch (e) { setState('idle'); testReset(); $('testStatus').textContent = micMessage(e); return; }
+    clearTimeout(S.closeTimer);
+    S.rec = { test: true, chunks: [], n: 0 };
+    S.tick = setInterval(() => {
+      const r = S.rec;
+      if (r && r.test) $('testGo').textContent = 'يسجّل… باقي ' + Math.max(0, Math.ceil(L.TEST_SEC - r.n / S.mic.rate)) + ' ثانية';
+    }, 200);
+    S.testTimer = setTimeout(testStop, (L.TEST_SEC + 4) * 1000); // a microphone that gives no sound must not leave the page waiting
+    $('testStatus').textContent = 'اقرا الكلام اللي فوق بصوتك العادي.';
+  }
+  function testStop() {
+    const r = S.rec;
+    if (!r || !r.test) return;
+    S.rec = null;
+    clearTimeout(S.testTimer);
+    release();
+    const rate = S.mic.rate;
+    $('testGo').textContent = 'لحظة…';
+    setTimeout(() => { // lets the screen repaint before the short heavy work
+      const verdict = L.micVerdict(L.micFacts(L.concat(r.chunks), rate));
+      const t = L.makeWav(r.chunks, rate); // exactly what a take is saved as: that is what the person must hear
+      S.test = { wav: t.wav, url: URL.createObjectURL(new Blob([t.wav], { type: 'audio/wav' })) };
+      $('testPlayer').src = S.test.url;
+      setState('idle');
+      testShow(verdict);
+    }, 30);
+  }
+  function testAbort(msg) {
+    if (S.rec && S.rec.test) { S.rec = null; release(); }
+    setState('idle');
+    testReset();
+    $('testStatus').textContent = msg || '';
+  }
+  function shareFile() {
+    try { return S.test ? new File([S.test.wav], 'mic-test.wav', { type: 'audio/wav' }) : null; } catch (e) { return null; /* no File constructor: no share button */ }
+  }
+  function canShare() {
+    const f = shareFile();
+    try { return !!(f && navigator.canShare && navigator.canShare({ files: [f] })); } catch (e) { return false; /* same */ }
+  }
+  function testShow(v) {
+    const box = $('testVerdict');
+    box.textContent = '';
+    box.className = 'verdict ' + (v.ok ? 'ok' : 'bad');
+    const head = document.createElement('div');
+    head.textContent = v.ok ? '✅ القياس ما لقى مشكلة. الحين اسمع التجربة: إذا صوتك واضح ونظيف كمّل.' : '❌ فيه مشكلة في التسجيل:';
+    box.appendChild(head);
+    if (!v.ok) {
+      const ul = document.createElement('ul');
+      for (const p of v.problems) { const li = document.createElement('li'); li.textContent = p.text; ul.appendChild(li); }
+      box.appendChild(ul);
+    }
+    $('testIntro').hidden = true; $('testResult').hidden = false;
+    $('testOk').hidden = !v.ok; $('testAnyway').hidden = v.ok;
+    $('testRedo').classList.toggle('primary', !v.ok);
+    $('testShare').hidden = !canShare();
+    $('testStatus').textContent = v.ok ? '' : 'صلّحها وجرّب مرة ثانية. واسمع التجربة عشان تعرف الفرق.';
+  }
+  function testAccept() {
+    if (S.state !== 'idle' || !S.test) return;
+    S.micPass = true;
+    try { sessionStorage.setItem(PASS_KEY, '1'); } catch (e) { /* the test is asked again on the next page load */ }
+    testReset();
+    showSentence();
+  }
+  function testAgain() { // from the recorder back to the test: another room, a headset plugged in
+    if (S.state !== 'idle') return;
+    S.micPass = false;
+    try { sessionStorage.removeItem(PASS_KEY); } catch (e) { /* nothing was stored */ }
+    testReset();
+    showSentence();
+  }
+  async function testShare() {
+    const f = shareFile();
+    if (!f) return;
+    try { await navigator.share({ files: [f], title: 'تجربة المايك', text: 'تجربة المايك قبل التسجيل' }); }
+    catch (e) { /* the person closed the share sheet */ }
+  }
+
   async function start() {
     const free = S.mode === 'free';
-    if (S.state !== 'idle' || (!free && !L.cleanText($('text').value))) return;
+    if (!S.micPass || S.state !== 'idle' || (!free && !L.cleanText($('text').value))) return;
     setState('opening');
     status('جاري تشغيل الميكروفون…');
     try { await openMic(); } catch (e) { setState('idle'); status(micMessage(e), 'bad'); return; }
@@ -567,6 +674,7 @@
   function showSetup(msg) {
     dropTake();
     if (S.state === 'rec' && S.rec && S.rec.free) stop(); // what was said so far is kept, under the name it was said with
+    else if (S.state === 'test') testAbort('');
     else if (S.rec) { S.rec = null; release(); }
     $('app').hidden = true; $('setup').hidden = false;
     $('name').value = S.name;
@@ -614,6 +722,13 @@
     $('modeFree').onclick = () => setMode('free');
     $('modeOne').onclick = () => setMode('one');
     $('more').onclick = morePage;
+    $('testGo').onclick = testStart;
+    $('testRedo').onclick = testStart;
+    $('testOk').onclick = testAccept;
+    $('testAnyway').onclick = testAccept;
+    $('testShare').onclick = testShare;
+    $('micAgain').onclick = testAgain;
+    S.micPass = micPassed();
     S.mode = store.get('ov_rec_mode') === 'one' ? 'one' : 'free';
     $('redo').onclick = redo;
     $('next').onclick = next;
@@ -627,7 +742,12 @@
     window.addEventListener('pagehide', closeMic);
     window.addEventListener('beforeunload', (e) => { if (S.state === 'rec' || S.state === 'review') { e.preventDefault(); e.returnValue = ''; } });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { if (S.state !== 'rec') closeMic(); if (S.pend.size) flush(); return; }
+      if (document.hidden) {
+        if (S.state === 'test') testAbort('التجربة وقفت لأنّ الصفحة انسكّرت. جرّب مرة ثانية.');
+        if (S.state !== 'rec') closeMic();
+        if (S.pend.size) flush();
+        return;
+      }
       loadStats();
       // back to the page in the middle of a continuous take: the screen lock is asked for again
       // (the browser dropped it), and the microphone is woken if the browser put it to sleep

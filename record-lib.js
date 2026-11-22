@@ -193,6 +193,104 @@
     return { wav: encodeWav(int16, TARGET_RATE), seconds: Math.round(seconds * 100) / 100, level: lv, verdict: judge(lv, seconds) };
   }
 
+  /* ---------- the microphone test ---------- */
+  // Saif's first half hour (Nov 2026) came through a microphone that lost the consonants (2-4 kHz sat
+  // 16 dB under clear speech). Two nights of training on it gave «صوت هواء ومش واضح», and no cleaning
+  // afterwards satisfied the owner's ear. So before any long take the page records 15 seconds, the
+  // person hears them, and these measurements point at what a recording like that one gets wrong.
+  // They are hints: the ear decides (the owner, 22 Nov, of a clip the numbers called clean: «لسّه فيه»).
+  const TEST_SEC = 15;
+  const MIC = {
+    minRate: 32000,      // below this the device is in its phone-call mode (a Bluetooth headset)
+    minTalkSec: 4,       // of the 15 s
+    quietDb: -34,        // speech level (RMS of the louder frames) under this: too far or too soft
+    clip: 0.005,         // share of samples at full scale
+    noisyDb: 20,         // speech must be this far over the quietest tenth of the take
+    muffledDb: -22,      // 2-4 kHz against 0.3-1 kHz while speaking: clear speech -9..-18, Saif's take -27
+    dullDb: -33,         // 4-8 kHz against 0.3-1 kHz: clear speech -11..-24, Saif's take -40
+  };
+  // In-place radix-2 FFT (re, im: Float64Array of a power-of-two length).
+  function fft(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const a = i + k, b = a + len / 2;
+          const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+          const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+  }
+  const db10 = (x) => 10 * Math.log10(Math.max(x, 1e-12));
+  // What a take sounds like, in numbers: x is raw Float32 at the device's rate.
+  function micFacts(x, rate) {
+    const N = rate >= 32000 ? 2048 : 1024, hop = N / 2;
+    const frames = Math.max(0, Math.floor((x.length - N) / hop) + 1);
+    const facts = { rate, seconds: x.length / rate, talkSec: 0, speechDb: -120, snrDb: 0, presenceDb: -120, highDb: -120, clip: 0 };
+    if (frames < 8) return facts;
+    let clip = 0;
+    for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) >= 0.985) clip++;
+    facts.clip = clip / x.length;
+    const energy = new Float64Array(frames);
+    for (let f = 0; f < frames; f++) { let e = 0; for (let i = f * hop; i < f * hop + N; i++) e += x[i] * x[i]; energy[f] = e / N; }
+    const sorted = Array.from(energy).sort((a, b) => a - b);
+    const mean = (a, b) => { let t = 0; for (let i = a; i < b; i++) t += sorted[i]; return t / Math.max(1, b - a); };
+    const noise = mean(0, Math.max(1, Math.floor(frames * 0.1)));
+    const speech = mean(Math.floor(frames * 0.7), frames);
+    facts.speechDb = db10(speech);
+    facts.snrDb = db10(speech) - db10(noise);
+    // a frame with talk in it: within 13 dB of the loud ones, and over the room (in a noisy room speech is
+    // only a little over it: that must come out as «ضجة», not as «ما سمعت كلام»)
+    const gate = Math.max(noise * 2, speech * 0.05);
+    const win = new Float64Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+    const band = [0, 0, 0], edge = [[300, 1000], [2000, 4000], [4000, Math.min(8000, rate / 2)]];
+    const re = new Float64Array(N), im = new Float64Array(N);
+    let talk = 0;
+    for (let f = 0; f < frames; f++) {
+      if (energy[f] < gate) continue;
+      talk++;
+      for (let i = 0; i < N; i++) { re[i] = x[f * hop + i] * win[i]; im[i] = 0; }
+      fft(re, im);
+      for (let b = 0; b < 3; b++) {
+        const lo = Math.ceil(edge[b][0] * N / rate), hi = Math.min(N / 2, Math.floor(edge[b][1] * N / rate));
+        for (let k = lo; k < hi; k++) band[b] += re[k] * re[k] + im[k] * im[k];
+      }
+    }
+    facts.talkSec = talk * hop / rate;
+    if (talk && band[0] > 0) {
+      facts.presenceDb = db10(band[1] / band[0]);
+      facts.highDb = edge[2][1] > 4000 ? db10(band[2] / band[0]) : -120;
+    }
+    return facts;
+  }
+  // The facts as what to tell the person. ok = nothing here says the take is bad.
+  function micVerdict(facts) {
+    const problems = [];
+    const add = (code, text) => problems.push({ code, text });
+    if (facts.talkSec < MIC.minTalkSec) add('nospeech', 'ما سمعت كلام كفاية. اقرا الكلام اللي على الشاشة بصوتك العادي.');
+    else {
+      if (facts.rate < MIC.minRate) add('narrow', 'الجوال يسجّل بوضع المكالمات (غالبًا سمّاعة بلوتوث شابكة). افصل السمّاعة وسجّل بمايك الجوال نفسه.');
+      if (facts.clip > MIC.clip) add('loud', 'الصوت عالي ومقطّع. ابعد الجوال شوي عن فمك.');
+      else if (facts.speechDb < MIC.quietDb) add('quiet', 'الصوت واطي. قرّب الجوال شبر من فمك.');
+      if (facts.presenceDb < MIC.muffledDb || (facts.rate >= MIC.minRate && facts.highDb < MIC.dullDb)) {
+        add('muffled', 'الصوت مكتوم: المايك مغطّى أو بعيد، أو شابك سمّاعة، أو الصوت طالع من سمّاعة جهاز ثاني. شيل يدك عن فتحة المايك وقرّب الجوال.');
+      }
+      if (facts.snrDb < MIC.noisyDb) add('noisy', 'في ضجة بالمكان (مكيّف، مروحة، تلفزيون). روح مكان أهدى.');
+    }
+    return { ok: problems.length === 0, problems };
+  }
+
   /* ---------- a continuous take ---------- */
   // The owner (21 Nov): «اذا تريد 30 دقيقة ليش ماتخليها مره وحده… هذا عذاب يعني اسكت وارفع ويتكلم».
   // One press, up to 30 minutes; the page cuts the take into pieces of under a minute and uploads
@@ -232,7 +330,7 @@
     return r;
   }
 
-  const api = { FREE_MAX_SEC, CUT_SOFT_SEC, CUT_HARD_SEC, cutNow, TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, DIALECTS, dialectLabel, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
+  const api = { TEST_SEC, MIC, fft, micFacts, micVerdict, FREE_MAX_SEC, CUT_SOFT_SEC, CUT_HARD_SEC, cutNow, TARGET_RATE, REGS, PATTERN, cleanName, nameKey, cleanText, hash32, mulberry32, buildOrder, DIALECTS, dialectLabel, concat, trimSilence, resample, toInt16, encodeWav, level, judge, makeWav, batchPlan, fmtTime, newId };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OVRec = api;
 })(typeof window !== 'undefined' ? window : globalThis);
